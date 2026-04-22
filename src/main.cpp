@@ -37,7 +37,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "9.6"
+#define ServerVersion "9.7"
 String  webpage = "";
 
 #include "CSS.h"
@@ -68,11 +68,16 @@ char blinds_swing_direction[7] = "DOWN"; // Default
 char blinds_servo_install[7] = "LEFT";  // Default
 char blinds_trim_adjust[3] = "0";  // Default
 char blinds_slip_correction[5] = "ON";  // Default
-// V9.4: default OTA path points at the fork's always-latest release asset.
-// WiFiClientSecure + setInsecure + follow-redirects handles the GitHub 302
-// chain to objects.githubusercontent.com transparently. User can override
-// in the web UI (Config → OTAAuto path) to point at a private mirror.
-char OTAAuto_path[128] = "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin";
+// V9.7: base URL — firmware appends `version.json` for the check and
+// `mk-blindcontrol.bin` for Auto-OTA. Single user-editable field, so a
+// fork can point at its own release assets without source edits. Must
+// be an asset-root URL that serves both files (GitHub's
+// /releases/latest/download/ does this once version.json is attached
+// as a release asset, which our CI now does).
+// The variable name + config key stay `OTAAuto_path` for storage compat
+// with v9.4–v9.6 installs; legacy values ending in `.bin` are migrated
+// to a base URL on load (see config-load path).
+char OTAAuto_path[128] = "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/";
 char tele_battery_set[4] = "60";   // in seconds
 char tele_update_set[4] = "60";
 char open_limit_set[5] = ""; // open limit set, set by user and program can be inverter
@@ -94,10 +99,12 @@ char software_variant[7] = "00";   // Legacy field, unused for display.
 // V9.3: user-visible firmware version string. Decoupled from `software_version`
 // so we can display the true fork version in the web UI + MQTT `sw_version`
 // attribute without triggering WiFiManager's JSON-blob-size reset.
-String firmware_installed = "V9.6";
-// V9.4: the check URL now points at a version.json served from the fork's
-// main branch. CI keeps it in sync with whatever the latest release is.
-String url = "https://raw.githubusercontent.com/TehRobot-Assistant/mk-blindcontrol/main/version.json";
+String firmware_installed = "V9.7";
+// V9.7: check URL is derived per-call from OTAAuto_path (the single
+// user-editable base URL). Keep the global `url` String allocated for
+// source-compat with anything that references it, but we rewrite it
+// just before each FirmwareCheck() call.
+String url = "";
 const char* POWER_TOPIC = "cmnd/power/POWER";
 char data[80];
 int msgcommand = 180;  // payload converted to initger number
@@ -1006,15 +1013,20 @@ void OTAUpgrade() {
   // than the check, but the default 16 KB was also OOMing under live
   // memory pressure. 2 KB input buffer gives enough headroom for TLS
   // records while staying within ESP8266's heap budget.
+  // V9.7: compose the .bin URL from the base, same rule as the check.
+  String otaBase = String(OTAAuto_path);
+  if (!otaBase.endsWith("/")) otaBase += "/";
+  String otaUrl = otaBase + "mk-blindcontrol.bin";
+
   ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   BearSSL::WiFiClientSecure secureClient;
   t_httpUpdate_return ret;
-  if (String(OTAAuto_path).startsWith("https://")) {
+  if (otaUrl.startsWith("https://")) {
     secureClient.setInsecure();
     secureClient.setBufferSizes(2048, 512);
-    ret = ESPhttpUpdate.update(secureClient, OTAAuto_path);
+    ret = ESPhttpUpdate.update(secureClient, otaUrl);
   } else {
-    ret = ESPhttpUpdate.update(net, OTAAuto_path);
+    ret = ESPhttpUpdate.update(net, otaUrl);
   }
 
   switch (ret) {
@@ -1565,7 +1577,7 @@ void Firmware_Update() {
   webpage += F("<h3 class='rcorners_m'>Firmware Updater</h3><br>");
   webpage += F("<table align='center'>");
   webpage += F("<h3> MANUAL - Upload Firmware from local folder or directory. User selects file </h3>");
-  webpage += F("<h3> AUTO - Upload Firmware from OTA Server as set it SETUP 'OTAAuto path' </h3>");
+  webpage += F("<h3> AUTO - Upload Firmware from OTA Server as set in SETUP 'Update base URL' </h3>");
   webpage += F("<h3> CHECK - Check Resportory Server for latest Firmware release, and advises of upgrade and impact advice</h3>");
   webpage += F("<table align='center'>");
   webpage += F("</table>");
@@ -1663,8 +1675,8 @@ void Config_Setup() {
   webpage += F("<td><select name='input_mqtt_isAuthentication'><option value=''>         </option><option value='FALSE'>FALSE</option><option value='TRUE'>TRUE</option></select></td></tr>");
   webpage += "<tr><td>Admin Password</td><td>"+String(update_password)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
-  webpage += "<tr><td>OTAAuto path</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
-  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin'></td></tr>");
+  webpage += "<tr><td>Update base URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
+  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases/latest/download/'></td></tr>");
   webpage += "<tr><td>Blind Speed</td><td>"+String(blinds_speed)+"</td></td>"; // tr
   webpage += F("<td><select name='input_blinds_speed'><option value=''>         </option><option value='SLOW'>SLOW</option><option value='FAST'>FAST</option></select></td></tr>");
   webpage += "<tr><td>Motor Installed Side</td><td>"+String(blinds_servo_install)+"</td></td>"; // tr
@@ -2325,6 +2337,12 @@ void FirmwareCheck() {
   // 10-15 KB more headroom.
   webpage = "";
 
+  // V9.7: compose the check URL from the user-editable base. Ensure we
+  // have a trailing slash before appending the filename.
+  String base = String(OTAAuto_path);
+  if (!base.endsWith("/")) base += "/";
+  url = base + "version.json";
+
   String payload;
   int status = 0;
   String errStr;
@@ -2595,14 +2613,25 @@ void setup() {
           strcpy(blinds_trim_adjust, json["blinds_trim_adjust"]);
           strcpy(blinds_slip_correction, json["blinds_slip_correction"]);
           strcpy(OTAAuto_path, json["OTAAuto_path"]);
-          // V9.4: one-time migration. Users upgrading from upstream V8 or
-          // V9.1-V9.3 have the dead mountain-eagle URL persisted in their
-          // /V8.json. Replace it with the fork's default so the Auto-OTA
-          // button works out of the box — user can still override from
-          // the Config page if they want their own mirror.
+          // V9.4: replace the dead upstream mountain-eagle URL with the
+          // fork's default (runs on first V9.4+ boot after flashing from
+          // upstream or V9.1-V9.3).
           if (strstr(OTAAuto_path, "mountaineagle-technologies") != nullptr) {
-            strcpy(OTAAuto_path, "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin");
+            strcpy(OTAAuto_path, "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/");
             shouldSaveConfig = true;
+          }
+          // V9.7: field semantic changed — was "full URL to .bin", now
+          // "base URL that serves both version.json + mk-blindcontrol.bin".
+          // Strip a trailing `/mk-blindcontrol.bin` (and any other single
+          // filename) so V9.4-V9.6 installs migrate transparently. User's
+          // custom mirror URLs that already end with "/" are untouched.
+          size_t plen = strlen(OTAAuto_path);
+          if (plen > 0 && OTAAuto_path[plen - 1] != '/') {
+            char *lastSlash = strrchr(OTAAuto_path, '/');
+            if (lastSlash != nullptr && lastSlash != OTAAuto_path) {
+              *(lastSlash + 1) = '\0';  // keep the slash, drop the filename
+              shouldSaveConfig = true;
+            }
           }
           strcpy(tele_update_set, json["tele_update_set"]);
         }

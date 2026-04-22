@@ -1,9 +1,13 @@
 name: Build + Release
 
-# On tag push like `v9.3` → builds the firmware with PlatformIO, tags a GitHub
-# release, and attaches the binary as `mk-blindcontrol.bin`. The
-# `/releases/latest/download/mk-blindcontrol.bin` URL always redirects to the
-# latest tagged build so users never have to update their flash-script URL.
+# On tag push like `v9.7` → builds the firmware with PlatformIO, tags a
+# GitHub release, and attaches both `mk-blindcontrol.bin` and
+# `version.json` as release assets. The firmware's "Update base URL"
+# field points at `/releases/latest/download/`, and appends
+# `mk-blindcontrol.bin` or `version.json` depending on whether it's
+# updating or checking. A fork following the same shape (both files
+# uploaded to their own release) works unchanged — paste the fork's
+# base URL into the unit's Config page.
 #
 # Also allows manual dispatch for ad-hoc rebuilds without a new tag.
 
@@ -51,6 +55,17 @@ jobs:
           cp .pio/build/esp8266/firmware.bin mk-blindcontrol.bin
           sha256sum mk-blindcontrol.bin | tee mk-blindcontrol.bin.sha256
 
+      # Generate version.json from the tag so the firmware's Check button
+      # reports the right release when it GETs /releases/latest/download/version.json.
+      - name: Generate version.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          RELEASE="${TAG#v}"   # strip leading 'v' → "9.7"
+          DATE="$(date -u +%d/%m/%Y)"
+          printf '{"release":"V%s","impact":"LOW","date":"%s"}\n' "${RELEASE}" "${DATE}" > version.json
+          cat version.json
+
       - name: Upload build artefact (for workflow_dispatch + non-tag builds)
         uses: actions/upload-artifact@v4
         with:
@@ -64,23 +79,18 @@ jobs:
           files: |
             mk-blindcontrol.bin
             mk-blindcontrol.bin.sha256
+            version.json
           generate_release_notes: true
           draft: false
           prerelease: false
 
-      # Keep version.json on `main` in sync with the latest release tag so
-      # the firmware's /firmwarecheck endpoint reports the current version.
-      # Runs only on tag pushes, straight after the release is published.
+      # Also keep version.json in main up to date for anyone mirroring via
+      # raw.githubusercontent.com/<org>/mk-blindcontrol/main/version.json.
+      # Optional — release asset is the default path the firmware checks.
       - name: Update version.json on main
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euxo pipefail
-          TAG="${GITHUB_REF#refs/tags/}"
-          RELEASE="${TAG#v}"   # strip leading 'v' → "9.4"
-          DATE="$(date -u +%d/%m/%Y)"
-          cat > version.json <<JSON
-          {"release":"V${RELEASE}","impact":"LOW","date":"${DATE}"}
-          JSON
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git fetch origin main
@@ -89,6 +99,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "version.json unchanged, skip commit"
           else
-            git commit -m "chore: bump version.json to ${TAG} [skip ci]"
+            git commit -m "chore: bump version.json to ${GITHUB_REF#refs/tags/} [skip ci]"
             git push origin main
           fi
