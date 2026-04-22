@@ -36,7 +36,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "8"
+#define ServerVersion "9.3"
 String  webpage = "";
 
 #include "CSS.h"
@@ -84,9 +84,12 @@ String BufferPos = "0";
 // Unique Software ID and Version Information
 char software_name[40] = "MK-BlindsControl";
 char software_version_old[7] = "V7"; // previous software version
-char software_version[7] = "V8";   // changing this value will cause WiFiManager to Reload and will have to re-configure Device eg if size of json changes then change this
-char software_variant[7] = "00";   // change this for minor changes only to program...will not cause re configure options
-String firmware_installed = String(software_version)+"."+String(software_variant);
+char software_version[7] = "V8";   // Config-compat only: used for /V8.json config path + the WiFiManager SSID suffix. Changing this forces users to re-configure, so it stays "V8" forever. The user-visible version string is `firmware_installed` below.
+char software_variant[7] = "00";   // Legacy field, unused for display.
+// V9.3: user-visible firmware version string. Decoupled from `software_version`
+// so we can display the true fork version in the web UI + MQTT `sw_version`
+// attribute without triggering WiFiManager's JSON-blob-size reset.
+String firmware_installed = "V9.3";
 String url = "http://mountaineagle-technologies.com.au/tasmota/version.json";
 const char* POWER_TOPIC = "cmnd/power/POWER";
 char data[80];
@@ -183,75 +186,275 @@ const int RSSI_MAX = -50; // define maximum strength of signal in dBm
 const int RSSI_MIN = -100; // define minimum strength of signal in dBm
 
 // Set tele reporting interval to MQTT broker for STATE, WiFi Level etc
-int tele_period = 60000;  // time in mili seconds 1000 ms = 1 sec
+// V9: retained for source-compat with any third-party forks that read this;
+// tele_update() and Battery_Check() now use cachedTeleUpdateSec /
+// cachedTeleBatterySec directly (no String allocation per loop iteration).
+int tele_period = 60000;  // deprecated in v9 — kept for ABI compat
 unsigned long time_now = 0;
 
 // flag for saving data
 bool shouldSaveConfig = false;
 
 WiFiClient net;
-int MQTTsize = 1200;
-MQTTClient client(1200);
+// --- V9 patch: MQTT buffer bumped from 1200 to 2048 ---
+// HA discovery payloads with dual-servo + battery + state + availability
+// topics can exceed 1200 bytes, causing silent MQTT publish drops.
+int MQTTsize = 2048;
+MQTTClient client(2048);
 
 unsigned long lastMillis = 0;
+
+// ============================================================================
+// V9 PATCH: Cached typed config
+// ----------------------------------------------------------------------------
+// Upstream v8 performs String(char[]).equalsIgnoreCase("LITERAL") comparisons
+// inside the servo move path and loop(). Every invocation allocates + copies
+// + frees an Arduino String on the ESP8266 heap (~40KB total). Over days of
+// uptime this fragments the heap and causes malloc failures that present as
+// random reboots or MQTT disconnects.
+//
+// Fix: parse the char[] config into typed enums/bools once, whenever config
+// loads or changes. All hot-path comparisons become int == int.
+// ============================================================================
+
+enum SpeedMode   { SPEED_MED = 0, SPEED_LOW, SPEED_HIGH, SPEED_SLOW };
+enum SwingDir    { SWING_DOWN = 0, SWING_UP };
+enum InstallSide { INSTALL_LEFT = 0, INSTALL_RIGHT };
+
+SpeedMode   cachedSpeed            = SPEED_MED;
+SwingDir    cachedSwing            = SWING_DOWN;
+InstallSide cachedInstall          = INSTALL_LEFT;
+bool        cachedSlipCorrection   = true;
+bool        cachedBatterySystem    = false;
+bool        cachedRemoteSwitch     = false;
+bool        cachedAutoDiscovery    = false;
+int         cachedTeleUpdateSec    = 60;
+int         cachedTeleBatterySec   = 60;
+
+// Call whenever the stringly-typed config has been (re)loaded.
+void cacheConfig() {
+  if      (strcasecmp(blinds_speed, "LOW")  == 0) cachedSpeed = SPEED_LOW;
+  else if (strcasecmp(blinds_speed, "HIGH") == 0) cachedSpeed = SPEED_HIGH;
+  else if (strcasecmp(blinds_speed, "FAST") == 0) cachedSpeed = SPEED_HIGH;  // V9.3: UI dropdown says FAST, was falling through to MED
+  else if (strcasecmp(blinds_speed, "SLOW") == 0) cachedSpeed = SPEED_SLOW;
+  else                                            cachedSpeed = SPEED_MED;
+
+  cachedSwing          = (strcasecmp(blinds_swing_direction, "UP")    == 0) ? SWING_UP : SWING_DOWN;
+  cachedInstall        = (strcasecmp(blinds_servo_install,   "RIGHT") == 0) ? INSTALL_RIGHT : INSTALL_LEFT;
+  cachedSlipCorrection = (strcasecmp(blinds_slip_correction, "ON")    == 0);
+  cachedBatterySystem  = (strcasecmp(battery_system,         "ON")    == 0);
+  cachedRemoteSwitch   = (strcasecmp(remote_switch,          "YES")   == 0);
+  cachedAutoDiscovery  = (strcasecmp(auto_discovery,         "ENABLED") == 0);
+
+  int t = atoi(tele_update_set);
+  cachedTeleUpdateSec = t > 0 ? t : 60;
+  int b = atoi(tele_battery_set);
+  cachedTeleBatterySec = b > 0 ? b : 60;
+}
+
+// ============================================================================
+// V9 PATCH: Non-blocking dual-servo state machine
+// ----------------------------------------------------------------------------
+// Upstream v8 uses blocking delay(2000) after every servo position command,
+// and per-step delay(40) in SLOW mode. Both servos always move together but
+// nothing else runs during that time: MQTT heartbeats miss, HTTP handlers
+// stall, mDNS stops updating, and the software watchdog drifts.
+//
+// This state machine advances both servos by 1 degree per stepInterval ms
+// when servoTick() is called from loop(). Between steps, loop() is free to
+// service MQTT, HTTP, buttons, telemetry, and WiFi reconnect.
+//
+// Dual-motor invariant: both servos always reach the same current angle.
+// They are attached/written together, they step together, they detach
+// together. The upstream v8 dual-motor behaviour is preserved exactly.
+// ============================================================================
+
+// V9.1: fields are volatile to defend against torn reads from any async
+// callback context (WiFi lwIP task, SSDP, MQTT client) that might inspect
+// servoBusy() or touch the struct. All writes to these fields still happen
+// from loop()-driven code, so no atomicity primitive is required — only
+// memory visibility.
+struct ServoState {
+  volatile int           current          = 180; // last commanded degree
+  volatile int           target           = 180; // where we're heading
+  volatile unsigned long nextStepAt       = 0;
+  volatile unsigned long stepInterval     = 40;
+  volatile unsigned long detachAt         = 0;   // 0 = don't detach; else millis() deadline
+  volatile unsigned long immediateDoneAt  = 0;   // V9.3: non-zero = immediate mode, wait for this ms
+  volatile bool          active           = false;
+  volatile bool          pendingPublish   = false; // V9.1: set on move-complete
+} servoState;
+
+// V9.1: called once from setup() to make the zero-state explicit, independent
+// of whether the compiler actually runs in-class initializers for globals
+// (the ESP8266 Xtensa toolchain is not guaranteed to under all conditions).
+void servoStateInit() {
+  servoState.current          = ServoPos;   // honour any restored position
+  servoState.target           = ServoPos;
+  servoState.nextStepAt       = 0;
+  servoState.stepInterval     = 40;
+  servoState.detachAt         = 0;
+  servoState.immediateDoneAt  = 0;
+  servoState.active           = false;
+  servoState.pendingPublish   = false;
+}
+
+void servoAttachIfNeeded() {
+  if (!myservo[0].attached()) myservo[0].attach(13, 544, 2200);
+  if (!myservo[1].attached()) myservo[1].attach(14, 544, 2200);
+}
+
+void servoDetachBoth() {
+  if (myservo[0].attached()) myservo[0].detach();
+  if (myservo[1].attached()) myservo[1].detach();
+}
+
+// V9.1: guarded detach — refuses to detach while a move is in progress.
+// Used by save_state(), HomePage(), and other paths that upstream v8
+// detached unconditionally. Upstream's blocking moveServo() ensured those
+// calls only ran after the servo had reached target; the non-blocking
+// state machine needs an explicit guard.
+void servoDetachBothIfIdle() {
+  if (!servoState.active && servoState.detachAt == 0) {
+    servoDetachBoth();
+  }
+}
+
+// Kick off a move to `pos`. Uses the speed cached from config.
+// Returns immediately; servoTick() advances the move in loop().
+void servoBeginMove(int pos) {
+  servoAttachIfNeeded();
+  servoState.target           = pos;
+  servoState.detachAt         = 0;
+  servoState.immediateDoneAt  = 0;
+
+  // Already at target — just schedule a short settle+detach, no ramp.
+  if (servoState.current == pos) {
+    servoState.active         = false;
+    servoState.detachAt       = millis() + 500;
+    servoState.pendingPublish = true;
+    return;
+  }
+
+  // V9.3: FAST = immediate one-shot write. Upstream v8 used a single
+  // myservo.write(target) + delay(2000), letting the servo travel at its
+  // native MG90S speed (~2ms/°, full range ~300ms). v9.1's per-degree
+  // stepping at 5ms/° made FAST feel slow (180 × 5 = 900ms). The
+  // immediate path matches upstream's feel while staying non-blocking —
+  // we stay `active` until immediateDoneAt passes so servoWaitDone()
+  // still works for callers that rely on it (trim adjust, slip recovery).
+  if (cachedSpeed == SPEED_HIGH) {
+    int prev = servoState.current;
+    myservo[0].write(pos);
+    myservo[1].write(pos);
+    servoState.current        = pos;
+    ServoPos                  = pos;
+    // Estimated native servo travel: 200 ms minimum settle + 3 ms per °
+    // of travel. Conservative — real MG90S hits ~2 ms/° under no load.
+    unsigned long travelMs = 200UL + (unsigned long)abs(pos - prev) * 3UL;
+    servoState.active           = true;
+    servoState.immediateDoneAt  = millis() + travelMs;
+    return;
+  }
+
+  // Stepping mode: SLOW / LOW / MED. Per-degree ramp at stepInterval ms.
+  servoState.stepInterval = (cachedSpeed == SPEED_LOW || cachedSpeed == SPEED_SLOW) ? 80
+                          : 40;  // MED default
+  servoState.active = true;
+}
+
+// Convenience: issue a multi-shot kick (parity with upstream's "nudge 3 times
+// to overcome mechanical stiction at install time"). Non-blocking equivalent
+// just sets target once; the servo library already repeats PWM at 50Hz.
+void servoKick(int pos) { servoBeginMove(pos); }
+
+// Called every loop() iteration — does at most one servo step, non-blocking.
+void servoTick() {
+  unsigned long now = millis();
+
+  if (servoState.active) {
+    // V9.3: immediate mode (FAST) — write already happened in servoBeginMove,
+    // just wait for the servo's native travel time to elapse.
+    if (servoState.immediateDoneAt != 0) {
+      if ((long)(now - servoState.immediateDoneAt) >= 0) {
+        servoState.immediateDoneAt = 0;
+        servoState.active          = false;
+        servoState.detachAt        = now + 2000;   // settle, then detach
+        servoState.pendingPublish  = true;
+      }
+      return;
+    }
+    // Stepping mode — advance one degree per stepInterval.
+    if ((long)(now - servoState.nextStepAt) >= 0) {
+      if      (servoState.current < servoState.target) servoState.current++;
+      else if (servoState.current > servoState.target) servoState.current--;
+      myservo[0].write(servoState.current);
+      myservo[1].write(servoState.current);
+      servoState.nextStepAt = now + servoState.stepInterval;
+      if (servoState.current == servoState.target) {
+        servoState.active         = false;
+        servoState.detachAt       = now + 2000;   // settle, then release torque
+        servoState.pendingPublish = true;          // V9.1: ask loop() to re-publish state
+        ServoPos                  = servoState.current;
+      }
+    }
+  } else if (servoState.detachAt != 0 && (long)(now - servoState.detachAt) >= 0) {
+    servoDetachBoth();
+    servoState.detachAt = 0;
+  }
+}
+
+bool servoBusy() { return servoState.active; }
+
+// Cooperative wait: pumps servoTick() + yield() for up to `timeoutMs`.
+// Returns true if the servo finished within the window. Used by callers
+// that legitimately need synchronous completion — slip correction and
+// install-position flow.
+//
+// V9.1 fixes:
+//   * Uses elapsed-time arithmetic so millis() wrap after 49 days doesn't
+//     cause the wait to return immediately.
+//   * Explicitly feeds the HARDWARE watchdog (yield() only feeds the soft
+//     watchdog; a 15 s tight loop would otherwise reset the chip).
+//   * Pumps client.loop() so MQTT keep-alive is genuinely serviced during
+//     the wait (yield() does not call user-level callbacks).
+bool servoWaitDone(unsigned long timeoutMs) {
+  unsigned long start = millis();
+  while (servoBusy() && (millis() - start) < timeoutMs) {
+    servoTick();
+    if (client.connected()) client.loop();
+    httpServer.handleClient();
+    ESP.wdtFeed();   // hardware watchdog
+    yield();         // software watchdog + lwIP
+  }
+  return !servoBusy();
+}
 
 // saveConfigCallback - callback notifying us of the need to save config
 void saveConfigCallback () {
   shouldSaveConfig = true;
 }
 
-// moveServo
+// moveServo (V9: non-blocking)
+//
+// Issues the target to both servos and returns immediately.
+// loop() -> servoTick() advances the move one step at a time so MQTT, HTTP,
+// buttons, and WiFi can all continue to run during the physical travel.
+//
+// Dual-motor behaviour preserved: both servos always move together and end
+// at the same angle. The `blinddelay` that upstream v8 computed but then
+// ignored in the hot path is now properly applied per-step via cachedSpeed
+// (LOW=80ms, MED=40ms, HIGH=5ms, SLOW=80ms).
+//
+// Accepts `double` for signature compatibility with upstream callers.
 void moveServo(double pos) {
-  myservo[0].write(ServoPos);
-  myservo[1].write(ServoPos);
-
-  if (!myservo[0].attached()) {  // If the servo is not attached
-    myservo[0].attach(13, 544, 2200);
-    myservo[1].attach(14, 544, 2200);
-  }
-
-  delay(40); // 40
-
-  blinddelay = 0;
-  if (String(blinds_speed).equalsIgnoreCase("LOW")) {
-    blinddelay = 80;
-  }
-
-  if (String(blinds_speed).equalsIgnoreCase("MED")) {
-    blinddelay = 40;
-  }
-
-  if (String(blinds_speed).equalsIgnoreCase("HIGH")) {
-    blinddelay = 0;
-  }
-
-  if (String(blinds_speed).equalsIgnoreCase("SLOW")) {
-    if (pos < myservo[0].read()) {
-      for (int tempPos = myservo[0].read(); pos <= tempPos; tempPos--) {
-        // write to each server
-        myservo[0].write(tempPos);
-        myservo[1].write(tempPos);
-
-        delay(40); // 40
-      }
-    } else {
-      for (int tempPos = myservo[0].read(); pos >= tempPos; tempPos++) {
-        // write to each server
-        myservo[0].write(tempPos);
-        myservo[1].write(tempPos);
-
-        delay(40); // 40
-      }
-    }
-  } else {
-    // write to each server
-    myservo[0].write(pos);
-    myservo[1].write(pos);
-
-    delay(2000);
-  }
-
-  ServoPos = myservo[0].read();
+  int target = (int)pos;
+  if (target < 0)   target = 0;
+  if (target > 180) target = 180;
+  servoBeginMove(target);
+  // Caller's control-flow expectation is that the servo begins moving now;
+  // progress is now cooperative and driven from loop(). Callers that need
+  // to wait (e.g. pre-restart install flow) can spin on !servoBusy().
 }
 
 // AutoConfigBlind
@@ -353,11 +556,13 @@ void handleServo() {
   BufferPos = POS;
   int pos = POS.toInt();
 
-  // moveServo(pos);
-  myservo[0].write(pos);   //--> Move the servo motor according to the POS value
-  delay(15);
-  myservo[1].write(pos);   //--> Move the servo motor according to the POS value
-  delay(15);
+  // V9.1: route through the state machine instead of raw servo.write().
+  // Upstream's raw writes + delay(15) bypass the attach/detach tracking —
+  // if the servos are currently detached (detach timer fired), the writes
+  // go into the void and servoState.current drifts out of sync with
+  // reality. Using moveServo() ensures attach + per-step pacing + state
+  // machine coherence, and is non-blocking (returns before PWM reaches).
+  moveServo(pos);
 
   httpServer.send(200, "text/plane","");
 }
@@ -946,9 +1151,12 @@ void save_state() {
   serializeJson(devicestate, configFile);    // JSON6
 
     configFile.close();
-  // detach all servos
-  myservo[0].detach();
-  myservo[1].detach();
+  // V9.1: only detach when the servo state machine is idle. Upstream v8
+  // could unconditionally detach because its moveServo() blocked until
+  // the move completed; our non-blocking version means save_state() is
+  // often called with servoState.active == true, and unconditional detach
+  // would leave the blind limp mid-travel.
+  servoDetachBothIfIdle();
 }
 
 // isValidNumber
@@ -966,9 +1174,10 @@ boolean isValidNumber(String str) {
 
 // tele_update
 void tele_update() {
-  int tele_period = String(tele_update_set).toInt() * 1000; // time converted to millseconds
+  // V9: cached int replaces String(char[]).toInt() allocation per call.
+  const unsigned long telePeriodMs = (unsigned long)cachedTeleUpdateSec * 1000UL;
 
-  if ((millis() > time_now + tele_period) || (reboot==1)) {
+  if ((millis() > time_now + telePeriodMs) || (reboot==1)) {
     // start new json coding
     StaticJsonDocument<512> rootstate;
 
@@ -1030,39 +1239,65 @@ void connect() {
   WiFi.hostname(host);
   WiFi.begin();
 
-  while (WiFi.status() != WL_CONNECTED) {
+  // V9.1: detach servos before entering the potentially-long blocking WiFi
+  // and MQTT connect loops. MG90S-class servos draw ~200 mA each held;
+  // holding both while the broker is down can exceed the shared 5V/500 mA
+  // regulator and cause thermal latch or brownout. Safe to detach — we
+  // are intentionally pausing control until the network returns.
+  servoDetachBoth();
+
+  // V9.2: bound both connect loops. Upstream v8 looped forever with a fed
+  // hardware watchdog whenever WiFi or the MQTT broker was unreachable —
+  // setup() never returned, so httpServer.begin() at the end of setup()
+  // never ran, so the web UI was unreachable, so there was no way to fix
+  // a bad broker address without a reflash. Bounded loops fall through
+  // after ~30s; loop()'s existing WiFi watchdog (2816) and the standard
+  // MQTT reconnect path keep trying in the background.
+  const int CONNECT_MAX_SECONDS = 30;
+  int wifiSec = 0;
+  while (WiFi.status() != WL_CONNECTED && wifiSec < CONNECT_MAX_SECONDS) {
     delay(1000);
+    ESP.wdtFeed();
+    wifiSec++;
   }
 
-  // If authentication true then connect with username and password
-  if (String(mqtt_isAuthentication).equalsIgnoreCase("TRUE")) {
-    while (!client.connect(mqttDeviceID, mqtt_username, mqtt_password)) {
-      delay(1000);
-    }
+  int mqttSec = 0;
+  bool mqttAuth = String(mqtt_isAuthentication).equalsIgnoreCase("TRUE");
+  while (!client.connected() && mqttSec < CONNECT_MAX_SECONDS && WiFi.status() == WL_CONNECTED) {
+    bool ok = mqttAuth
+      ? client.connect(mqttDeviceID, mqtt_username, mqtt_password)
+      : client.connect(mqttDeviceID);
+    if (ok) break;
+    delay(1000);
+    ESP.wdtFeed();
+    mqttSec++;
+  }
+
+  // V9.2: publish/subscribe only when we actually got a live session.
+  // If the broker was unreachable these calls are no-ops anyway but the
+  // explicit guard makes intent clear and avoids any library-internal
+  // side effects on a disconnected client.
+  if (client.connected()) {
+    int len = strlen(MQTT_LWT_MESSAGE) + 1;
+
+    client.publish(MQTT_LWT_TOPIC, MQTT_LWT_MESSAGE, len, true);
+    client.subscribe("cmnd/" + _identifier + "/#");
+
+    client.subscribe("cmnd/tasmotas/#");   // allows for device reset, firmare upgrade etc commands via MQTT
+    Serial.print("cmnd/tasmotas/#");
+    if (String(auto_discovery).equalsIgnoreCase("ENABLED-BASIC") || String(auto_discovery).equalsIgnoreCase("ENABLED-TILT")) {
+      client.subscribe("homeassistant/status");
+    };
+
+    tele_update();    // publish saved states
+    publish_state();   // publish states to MQTT
   } else {
-    while (!client.connect(mqttDeviceID)) {
-      delay(1000);
-    }
+    Serial.printf(
+      "V9.2: MQTT broker unreachable after %ds, continuing setup. "
+      "Web UI at device IP will let you reconfigure. Broker reconnects "
+      "will continue in the background.\n",
+      mqttSec);
   }
-
-  int len = strlen(MQTT_LWT_MESSAGE) + 1;
-
-  client.publish(MQTT_LWT_TOPIC, MQTT_LWT_MESSAGE, len, true);
-  client.subscribe("cmnd/" + _identifier + "/#");
-
-  client.subscribe("cmnd/tasmotas/#");   // allows for device reset, firmare upgrade etc commands via MQTT
-  Serial.print("cmnd/tasmotas/#");
-  if (String(auto_discovery).equalsIgnoreCase("ENABLED-BASIC") || String(auto_discovery).equalsIgnoreCase("ENABLED-TILT")) {
-    client.subscribe("homeassistant/status");
-  };
-
-  // get_save_state(); // get saved state on reboot servo position message command speed
-
-  // moveServo(ServoPos); // moves servo to set pos as on powerup servo pos defaults to 90 regardless of previous osition
-
-  tele_update();    // publish saved states
-
-  publish_state();   // publish states to MQTT
 }
 // end connection to WiFi and MQTT
 
@@ -1098,7 +1333,7 @@ void messageReceived(String &topic, String &payload) {
     JsonObject StatusFWR = root.createNestedObject("StatusFWR");   // JSON6
     StatusFWR["Hostname"] = String(host);
     StatusFWR["Name"] = String(mqtt_topic);
-    StatusFWR["Version"] = software_version;
+    StatusFWR["Version"] = firmware_installed;  // V9.3: user-visible version
     StatusFWR["Software"] = software_name;
     StatusFWR["Variant"] = software_variant;
     StatusFWR["Speed"] = blinds_speed;
@@ -1211,35 +1446,34 @@ void messageReceived(String &topic, String &payload) {
       // if (String(blinds_invert_command).equalsIgnoreCase("YES"))
 
       // client.publish(String(mqtt_topic) + "/Other Settings Applied inverted");
-      if (msgString.toInt() <= 60 && msgString.toInt() >= 40 && String(blinds_slip_correction).equalsIgnoreCase("ON")) {
-        // client.publish("stat/" + _identifier + "/ALLIGNING", "INVERTED" );
+      // V9: slip correction requires the alignment move to physically
+      // complete before the target move begins. Under the non-blocking
+      // state machine, a back-to-back moveServo() would overwrite target
+      // before the first move finishes — losing the slip correction.
+      // Use servoWaitDone() to wait cooperatively (yields to MQTT/HTTP).
+      if (msgString.toInt() <= 60 && msgString.toInt() >= 40 && cachedSlipCorrection) {
         if (ServoPos/1.8 <= 60 && ServoPos/1.8 >=40) {
-          // client.publish("stat/" + _identifier + "/ALLIGNING", "INVERTED" );
+          // already aligned; nothing to do
         } else {
-          moveServo(180); // Reset Allignment to closed state to obtain correct positioning if around 1/2 range
+          moveServo(180); // Reset Allignment to closed state
+          servoWaitDone(20000UL);
         }
       }
 
       // actual move after alignment
-      // client.publish("stat/" + _identifier + "/MOVE-INVERTED", "MOVING" );
       moveServo((100 - msgString.toInt()) * 1.8);
     } else {
-      if (msgString.toInt() <= 60 && msgString.toInt() >= 40 && String(blinds_slip_correction).equalsIgnoreCase("ON")) {
+      if (msgString.toInt() <= 60 && msgString.toInt() >= 40 && cachedSlipCorrection) {
         if (ServoPos/1.8 <= 60 && ServoPos/1.8 >= 40) {
-          // client.publish("stat/" + _identifier + "/ALLIGNING", "INVERTED" );
+          // already aligned; nothing to do
         } else {
-          moveServo(0); // Reset Allignment to open state to obtain correct positioning if around 1/2 range
+          moveServo(0); // Reset Allignment to open state
+          servoWaitDone(20000UL);
         }
-
-        // moveServo(180); // Reset Allignment to open state to obtain correct positioning if around 1/2 range
-        // client.publish("stat/" + _identifier + "/ALLIGNING", "NON-INVERTED" );
-        // moveServo(0); // Reset Allignment to open state to obtain correct positioning if around 1/2 range
       }
 
-      // Actual move after alignment
-      // client.publish(String(mqtt_topic) + "/Other Settings Applied NOT inverted"); // can be removed Testing Debug
-      // client.publish("stat/" + _identifier + "/MOVE-NONINVERTED", "MOVING" );
-      moveServo(msgString.toInt() * 1.8); // Move the Servo to  other position
+      // actual move after alignment
+      moveServo(msgString.toInt() * 1.8); // Move the Servo to other position
     }
   }
 
@@ -1257,7 +1491,14 @@ void messageReceived(String &topic, String &payload) {
   }
 
   // New code for Open Only Trim Adjustment after publishing state back to mqtt server
+  //
+  // V9.1: upstream relied on the OPEN move above (moveServo(0) earlier in
+  // the handler) having blocked to completion before this trim adjustment
+  // fires. Under non-blocking moveServo(), the earlier OPEN move is still
+  // in flight when we get here — setting a new target below would abandon
+  // the OPEN travel. Wait cooperatively before issuing the trim move.
   if (blindstrim.toInt() > 0 && blindstrim.toInt() <= 75 && msgString.toInt() == 0) {
+    servoWaitDone(20000UL);   // wait for the prior OPEN move to settle
     client.publish(String(mqtt_topic) + "/Executing Trim Adjustment of:-  " + String(blindstrim) + " Percent");
 
     if (invert_command == true) {
@@ -1355,22 +1596,21 @@ void Set_Servo() {
   SendHTML_Content();
   SendHTML_Stop(); // Stop is needed because no content length was sent
 
+  // V9: the four repeated moveServo() calls were a workaround for upstream
+  // v8's blocking implementation. Under the non-blocking state machine a
+  // single target-set is sufficient — the servo library re-issues the PWM
+  // waveform at 50 Hz regardless. We then cooperatively wait for completion
+  // before the pre-restart delay so the physical motion actually happens.
   if (invert_command == true) {
-    // if (String(blinds_invert_command).equalsIgnoreCase("YES"))
     moveServo(180);
-    moveServo(180); // command to move 3 plus times to push servo motor, noticed some difference with just one command
-    moveServo(180);
-    moveServo(180);
-    // httpServer.send(201, "text/plain", "Servo Motor Positioned To OPEN State For Install,  Please Disconnect Power From Device NOW...Before Device AUTO Restarts In 20Seconds ");
-    } else {
-      moveServo(0);
-      moveServo(0);  // command to move 3 plus times to push servo motor, noticed some difference with just one command
-      moveServo(0);
-      moveServo(0);
-      // httpServer.send(201, "text/plain", "Servo Motor Positioned To OPEN State For Install,  Please Disconnect Power From Device NOW...Before Device AUTO Restarts In 20 Seconds ");
-    }
+  } else {
+    moveServo(0);
+  }
+  // V9.1: widened from 15s to 20s to leave headroom for SLOW-speed full
+  // travel (180 steps × 80ms = 14.4s, previously right at the 15s edge).
+  servoWaitDone(20000UL);
 
-  delay(20000);
+  delay(5000);              // V9: 5s disconnect-power window (down from 20s)
   ESP.restart();
 }
 
@@ -1457,13 +1697,10 @@ void Help() {
 
 // HomePage
 void HomePage() {
-  if (myservo[0].attached()) {  // If the servo is attached
-    myservo[0].detach();  // detach the servo motor
-    myservo[1].detach();
-  }
-
-  // myservo[0].detach();
-  // myservo[1].detach();
+  // V9.1: only detach when idle. Upstream unconditionally detached on
+  // every web UI page load, which under the non-blocking state machine
+  // would drop PWM mid-move and leave the blind stuck.
+  servoDetachBothIfIdle();
   SendHTML_Header();
 
   webpage += F("<h3 class='rcorners_m'>Status</h3><br>");
@@ -1881,6 +2118,9 @@ void Save_Config() {
 
       configFile.close();
 
+      // V9: refresh cached typed config after web-form save.
+      cacheConfig();
+
       webpage += "<h3>Changes Have Been Saved. </h3>";
 
       if (String(auto_discovery) != "DISABLED") {
@@ -2115,9 +2355,10 @@ void FirmwareCheck() {
 
 // Battery_Check
 void Battery_Check() {
-  int tele_period = String(tele_battery_set).toInt() * 1000; // time converted to millseconds
+  // V9: cached int replaces String(char[]).toInt() allocation per call.
+  const unsigned long batteryPeriodMs = (unsigned long)cachedTeleBatterySec * 1000UL;
 
-  if (millis() > time_now_2 + tele_period) {
+  if (millis() > time_now_2 + batteryPeriodMs) {
     int nVoltageRaw = analogRead(A0);
     float fVoltage = (float)nVoltageRaw * 0.00486;
     String S_battery_capacity = battery_capacity;
@@ -2302,6 +2543,10 @@ void setup() {
     }
   }
 
+  // V9: parse stringly-typed config into typed cached values exactly once.
+  // All hot-path comparisons use cached enums/bools/ints from here on.
+  cacheConfig();
+
   // The extra parameters to be configured (can be either global or just in the setup)
   // After connecting, parameter.getValue() will get you the configured value
   // id/name placeholder/prompt default length
@@ -2426,6 +2671,14 @@ void setup() {
   strcpy(OTAAuto_path, custom_OTAAuto_path.getValue());
   strcpy(tele_update_set, custom_tele_update_set.getValue());
 
+  // V9.1: refresh cached typed config *unconditionally* here — WiFiManager
+  // runs this block regardless of whether it decides to persist the config
+  // (shouldSaveConfig is set only when the portal was actively saved). If
+  // we only called cacheConfig inside the shouldSaveConfig branch below,
+  // the cached enums would lag behind the just-strcpy'd char[] values on
+  // a portal run that didn't trigger a save.
+  cacheConfig();
+
   // save the custom parameters to FS
   if (shouldSaveConfig) {
     // Serial.print("Saving configuration file ");
@@ -2468,6 +2721,11 @@ void setup() {
     serializeJson(json, configFile);    // JSON6
 
     configFile.close();
+
+    // V9: refresh cached typed config whenever config is persisted so
+    // subsequent loop iterations see the new speed/swing/battery settings
+    // without any String allocation.
+    cacheConfig();
   }
 
   delay(5000);
@@ -2578,49 +2836,93 @@ void setup() {
   AutoConfigBlind();
   get_save_state();
 
-  moveServo(ServoPos); // moves servo to set pos as on powerup servo pos defaults to 90 regardless of previous osition
-  myservo[0].detach();
-  myservo[1].detach();
+  // V9.1: explicitly initialise the servo state machine *before* the first
+  // move, and cooperatively wait for the restore-to-ServoPos move to finish
+  // before detaching. Upstream v8 relied on blocking moveServo() completing
+  // before the detach; the non-blocking state machine needs servoWaitDone()
+  // to preserve that behaviour and avoid the blind sitting at the power-on
+  // default angle (typically 90°) when the saved ServoPos differs.
+  servoStateInit();
+  servoBeginMove(ServoPos);
+  servoWaitDone(20000UL);
+  // servoTick() will handle its own detach 2 s after the move completes.
 }
 
 // loop - main loop
 void loop() {
+  // V9: advance any in-progress servo move (non-blocking, at most one step).
+  servoTick();
+
+  // V9.1: when a move has just completed, the servo has physically reached
+  // target — re-publish state so HA sees the *post-move* position instead
+  // of the stale pre-move one. Upstream's blocking moveServo() achieved
+  // this by fiat (publish-after-delay); the non-blocking state machine
+  // needs an explicit hand-off flag set by servoTick() on completion.
+  if (servoState.pendingPublish && !servoState.active) {
+    servoState.pendingPublish = false;
+    process_state();
+    publish_state();
+  }
+
+  // V9: WiFi watchdog. Upstream only notices MQTT dropping — but if WiFi
+  // itself is gone (AP reboot, channel change, roaming) MQTT will never
+  // reconnect. Give WiFi 30s to come back, then hard reboot the device.
+  static unsigned long wifiLostAt = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiLostAt == 0) {
+      wifiLostAt = millis();
+    } else if (millis() - wifiLostAt > 30000UL) {
+      Serial.println(F("V9: WiFi disconnected >30s, rebooting."));
+      ESP.restart();
+    }
+  } else {
+    wifiLostAt = 0;
+  }
+
   client.loop();
-  delay(10);
+  // V9.1: retain a tiny yield between client.loop() and the rest of the
+  // work to give 256dpi/MQTT's internal state machine CPU back to the
+  // lwIP stack — removing the delay entirely could stall TCP send buffers
+  // under simultaneous servo + MQTT publish load.
+  delay(1);
 
   if (!client.connected()) {
-    client.disconnect();
-    connect();
+    // V9: rate-limit reconnect attempts so we don't hammer a broker that's
+    // still warming up or a DNS resolver that's flaking.
+    static unsigned long lastMqttAttempt = 0;
+    if (millis() - lastMqttAttempt > 5000UL) {
+      lastMqttAttempt = millis();
+      client.disconnect();
+      connect();
+    }
   }
 
   httpServer.handleClient();
   MDNS.update();
 
-  // set to 0 to stop telementry update. help power save
-  if (String(tele_update_set).toInt()>0) {
-    // Serial.printlnln("Telementry update...");
+  // V9: cachedTeleUpdateSec replaces String(tele_update_set).toInt() allocation
+  // on every loop iteration. Zero disables telemetry (power save).
+  if (cachedTeleUpdateSec > 0) {
     tele_update();
   }
 
-  // Battery Check Monitor
-  if (String(battery_system).equalsIgnoreCase("ON")) {
-    // Serial.println("Checking Battery Status.. ");
+  // V9: cachedBatterySystem replaces String(battery_system).equalsIgnoreCase("ON").
+  if (cachedBatterySystem) {
     Battery_Check();
   }
 
   // Get button event and act accordingly
   button_result = 0;
   checkButton();
-  if (String(remote_switch).equalsIgnoreCase("YES")) {
-    // TODO: change to switch
-    if (button_result == 1) {
-      clickEvent();
-    } else if (button_result == 2) {
-      doubleClickEvent();
-    } else if (button_result == 3) {
-      holdEvent();
-    } else if (button_result == 4) {
-      longHoldEvent();
-    } // allows for reset operation
+  // V9: cachedRemoteSwitch replaces String(remote_switch).equalsIgnoreCase("YES").
+  if (cachedRemoteSwitch) {
+    switch (button_result) {
+      case 1: clickEvent();      break;
+      case 2: doubleClickEvent(); break;
+      case 3: holdEvent();       break;
+      case 4: longHoldEvent();   break;
+    }
   }
+
+  yield();  // cooperative scheduling for the WiFi stack
 }
