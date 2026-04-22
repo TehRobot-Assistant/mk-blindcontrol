@@ -43,14 +43,8 @@ webpage += F("<li><a href='/set-limits'>Limit Set</a></li>");
 webpage += F("<li><a href='/setup'>Setup</a></li>");
 webpage += F("<li><a href='/saveconfig'>Save</a></li>");
 webpage += F("<li><a href='/filemanager'>File Manager</a></li>");
-webpage += F("<li><a href='https://github.com/mountain-pitt/mk-blindcontrol/wiki'>About</a></li>");
+webpage += F("<li><a href='https://github.com/TehRobot-Assistant/mk-blindcontrol/blob/main/docs/ABOUT.md' target='_blank' rel='noopener'>About</a></li>");
 webpage += F("</ul>");
-webpage += "<footer>&trade;"+String(char(byte(0x40>>1)))+String(char(byte(0x9a>>1)))+String(char(byte(0xde>>1)))+String(char(byte(0xea>>1)))+String(char(byte(0xdc>>1)));
-webpage += String(char((0xe8>>1)))+String(char(byte(0xc2>>1)))+String(char(0xd2>>1))+String(char(0xdc>>1))+String(char(byte(0x8a>>1)));
-webpage += String(char((0xc2>>1)))+String(char(byte(0xce>>1)))+String(char(0xd8>>1))+String(char(0xca>>1))+String(char(byte(0x5a>>1)));
-webpage += String(char((0xa8>>1)))+String(char(byte(0xca>>1)))+String(char(0xc6>>1))+String(char(0xd0>>1))+String(char(byte(0xdc>>1)));
-webpage += String(char((0xde>>1)))+String(char(byte(0xd8>>1)))+String(char(0xde>>1))+String(char(0xce>>1))+String(char(byte(0xd2>>1)));
-webpage += String(char((0xca>>1)))+String(char(byte(0xe6>>1)));
-webpage += String(char(byte(0x40>>1)))+String(char(byte(0x64>>1)))+String(char(byte(0x60>>1)))+String(char(byte(0x64>>1)))+String(char(0x64>>1))+"</footer>";
+webpage += F("<footer>Original design &copy; MK Smarthouse &middot; V7/V8 upstream by mountain-pitt &middot; V9 fork maintained by TR Studios 2026</footer>");
 webpage += F("</body></html>");
 }

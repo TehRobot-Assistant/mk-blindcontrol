@@ -37,7 +37,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "9.7"
+#define ServerVersion "9.8"
 String  webpage = "";
 
 #include "CSS.h"
@@ -77,7 +77,7 @@ char blinds_slip_correction[5] = "ON";  // Default
 // The variable name + config key stay `OTAAuto_path` for storage compat
 // with v9.4–v9.6 installs; legacy values ending in `.bin` are migrated
 // to a base URL on load (see config-load path).
-char OTAAuto_path[128] = "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/";
+char OTAAuto_path[128] = "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases";
 char tele_battery_set[4] = "60";   // in seconds
 char tele_update_set[4] = "60";
 char open_limit_set[5] = ""; // open limit set, set by user and program can be inverter
@@ -99,12 +99,7 @@ char software_variant[7] = "00";   // Legacy field, unused for display.
 // V9.3: user-visible firmware version string. Decoupled from `software_version`
 // so we can display the true fork version in the web UI + MQTT `sw_version`
 // attribute without triggering WiFiManager's JSON-blob-size reset.
-String firmware_installed = "V9.7";
-// V9.7: check URL is derived per-call from OTAAuto_path (the single
-// user-editable base URL). Keep the global `url` String allocated for
-// source-compat with anything that references it, but we rewrite it
-// just before each FirmwareCheck() call.
-String url = "";
+String firmware_installed = "V9.8";
 const char* POWER_TOPIC = "cmnd/power/POWER";
 char data[80];
 int msgcommand = 180;  // payload converted to initger number
@@ -986,82 +981,12 @@ void get_save_state() {
   }
 }
 
-// OTAUpgrade - OTA Server needs to be running eg on Raspberry Pi etc or access to resporitory
-void OTAUpgrade() {
-  // Serial.print("OTA Upgrade Iniated... ");
-  restartflag = 1;
-  SendHTML_Header();
-  webpage += F("<h3 class='rcorners_m'>Auto Firmware Updater</h3><br>");
-  webpage += F("<h3> Connecting to OTA Server </h3>");
-  webpage += F("<h3> Downloading/Installing Firmware </h3>");
-  webpage += F("<h3> If Sucessfull and No futher Progress Displayed  </h3>");
-  webpage += F("<h3> Wait about 20 seconds</h3>");
-  webpage += F("<h3> Press Reboot to Activate New Firmware  </h3>");
-  webpage += F("<h3> Wait for about 10 seconds before pressing Back</h3>");
-  // webpage += F("<h3> Blind Will Jolt After Restart Then Press Back  </h3>");
-  webpage += F("<a href='/'><button>Back</button></a>");
-  webpage += F("<a href='/reboot'><button>Reboot</button></a>");
-  SendHTML_Content();
-
-  // V9.4: pick plain or secure client based on URL scheme. ESPhttpUpdate
-  // follows redirects; with GitHub releases the stable /latest/download/
-  // URL emits a 302 → objects.githubusercontent.com (HTTPS). Without
-  // setFollowRedirects the update fails silently. setInsecure skips cert
-  // verification (read-only public download).
-  // V9.5: same BearSSL buffer shrink as FirmwareCheck — the OTA download
-  // is ~500 KB streamed in chunks, so it actually needs MORE input buffer
-  // than the check, but the default 16 KB was also OOMing under live
-  // memory pressure. 2 KB input buffer gives enough headroom for TLS
-  // records while staying within ESP8266's heap budget.
-  // V9.7: compose the .bin URL from the base, same rule as the check.
-  String otaBase = String(OTAAuto_path);
-  if (!otaBase.endsWith("/")) otaBase += "/";
-  String otaUrl = otaBase + "mk-blindcontrol.bin";
-
-  ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  BearSSL::WiFiClientSecure secureClient;
-  t_httpUpdate_return ret;
-  if (otaUrl.startsWith("https://")) {
-    secureClient.setInsecure();
-    secureClient.setBufferSizes(2048, 512);
-    ret = ESPhttpUpdate.update(secureClient, otaUrl);
-  } else {
-    ret = ESPhttpUpdate.update(net, otaUrl);
-  }
-
-  switch (ret) {
-    case HTTP_UPDATE_FAILED:
-      Serial.print("OTA Upgrade Failed ");
-      client.publish("tele/" + _identifier + "/UPDATE", "HTTP_UPDATE_FAILD");
-      // Serial.println("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-      // httpServer.send(201, "text/plain", "OTA Update Failed Error DownLoading Firmware from OTA Server");
-
-      webpage += F("<h3> OTA Update Failed Error DownLoading Firmware from OTA Server  </h3>");
-      // webpage += F("<h3> OTA Update Failed Error DownLoading Firmware from OTA Server  </h3>");
-      break;
-
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.print("No Updates Available from OTA Server ");
-      client.publish("tele/" + _identifier + "/UPDATE", "HTTP_UPDATE_NO_UPDATES");
-      // httpServer.send(201, "text/plain", "No Updates Available from OTA Server ");
-      webpage += F("<h3> No Updates Available from OTA Server  </h3>");
-      // USE_SERIAL.println("HTTP_UPDATE_NO_UPDATES");
-      break;
-
-    case HTTP_UPDATE_OK:
-      client.publish("tele/" + String(_identifier) + "/UPDATE", "HTTP_UPDATE_OK");
-      // httpServer.send(201, "text/plain", "OTAUpdate OK , DownLoading Firmware from OTA Server and Installing ");
-      Serial.println("HTTP_UPDATE_OK");
-      webpage += F("<h3> OTAUpdate OK   </h3>");
-
-      break;
-  }
-
-  webpage += F("<a href='/'><button>Back</button></a>");
-  append_page_footer();
-  SendHTML_Content();
-  SendHTML_Stop(); // Stop is needed because no content length was sent
-}
+// V9.8: pull-OTA (Auto) and firmware-check (Check) removed. ESP8266's
+// BearSSL heap budget makes HTTPS fetches against GitHub unreliable on a
+// live unit (~6 KB free at request time; TLS handshake wants 10-14 KB
+// contiguous). Manual upload from the /firmware page is the supported
+// update path now. OTAAuto_path is kept as an editable vanity link to
+// the releases page so forks can point at their own repo.
 
 // handleMoveServo
 void handleMoveServo() {
@@ -1353,11 +1278,6 @@ void messageReceived(String &topic, String &payload) {
   } else if ((topic == "cmnd/tasmotas/Restart" || topic == "cmnd/" + _identifier + "/Restart") && msgString.toInt() == 1) {
     Serial.print("tele/" + String(mqtt_topic) + "/RESTART"+ " ACTIVATED");
     ESP.reset();
-  } else if ((topic == "cmnd/tasmotas/Upgrade" || topic == "cmnd/" + _identifier + "/Upgrade") && msgString.toInt() == 1) {
-    Serial.print("tele/" + _identifier + "/UPGRADE"+ " ACTIVATED");
-    ESPhttpUpdate.rebootOnUpdate(true);  // auto restart after firmware downloaded
-    bypassdevstat = 1;
-    OTAUpgrade();
   } else if ((topic == "cmnd/tasmotas/STATUS" ||  topic == "cmnd" + _identifier + "/STATUS") && msgString.toInt() == 2) {
     // make Status STATUS
     // Serial.print("stat/" + _identifier + "/STATUS2"+ " GENERATED");
@@ -1571,19 +1491,13 @@ void File_Manager() {
 
 // Firmware_Update
 void Firmware_Update() {
-  ESPhttpUpdate.rebootOnUpdate(false); // prevents reboot on AUTO upgrade selection user must restart manually
   SendHTML_Header();
 
   webpage += F("<h3 class='rcorners_m'>Firmware Updater</h3><br>");
-  webpage += F("<table align='center'>");
-  webpage += F("<h3> MANUAL - Upload Firmware from local folder or directory. User selects file </h3>");
-  webpage += F("<h3> AUTO - Upload Firmware from OTA Server as set in SETUP 'Update base URL' </h3>");
-  webpage += F("<h3> CHECK - Check Resportory Server for latest Firmware release, and advises of upgrade and impact advice</h3>");
-  webpage += F("<table align='center'>");
-  webpage += F("</table>");
+  webpage += F("<h3> MANUAL - Upload firmware from local folder. Download the latest <code>.bin</code> from the releases page below, then use Manual to flash it.</h3>");
+  webpage += F("<h3> Auto / Check removed in V9.8 — ESP8266 HTTPS is unreliable under live memory pressure. Manual upload is the supported path.</h3>");
   webpage += F("<a href='/firmware'><button>Manual</button></a>");
-  webpage += F("<a href='/firmwareauto'><button>Auto</button></a>");
-  webpage += F("<a href='/firmwarecheck'><button>Check</button></a>");
+  webpage += "<a href='" + String(OTAAuto_path) + "' target='_blank' rel='noopener'><button>Releases</button></a>";
 
   append_page_footer();
   SendHTML_Content();
@@ -1675,8 +1589,8 @@ void Config_Setup() {
   webpage += F("<td><select name='input_mqtt_isAuthentication'><option value=''>         </option><option value='FALSE'>FALSE</option><option value='TRUE'>TRUE</option></select></td></tr>");
   webpage += "<tr><td>Admin Password</td><td>"+String(update_password)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
-  webpage += "<tr><td>Update base URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
-  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases/latest/download/'></td></tr>");
+  webpage += "<tr><td>Releases URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
+  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases'></td></tr>");
   webpage += "<tr><td>Blind Speed</td><td>"+String(blinds_speed)+"</td></td>"; // tr
   webpage += F("<td><select name='input_blinds_speed'><option value=''>         </option><option value='SLOW'>SLOW</option><option value='FAST'>FAST</option></select></td></tr>");
   webpage += "<tr><td>Motor Installed Side</td><td>"+String(blinds_servo_install)+"</td></td>"; // tr
@@ -2318,119 +2232,6 @@ void checkButton() {
   button_result = event;
 }
 
-// FirmwareCheck - Allocate a 1024-byte buffer for the JSON document.
-// V9.4: HTTPS support via WiFiClientSecure + setInsecure (we just read a
-// public JSON; cert verification would be nice but BearSSL on ESP8266 is
-// memory-heavy and unreliable). Follows redirects so it works with
-// GitHub Pages / raw.githubusercontent.com / private mirrors equally.
-void FirmwareCheck() {
-  char firmware_release[7] = "Vx.xx";
-  char firmware_impact[9] = "UNKNOWN";
-  char firmware_date[12] = "99/99/9999";
-
-  // V9.6: do ALL the HTTPS work BEFORE any page rendering, so BearSSL's
-  // TLS handshake has maximum heap available. v9.5 was calling http.GET()
-  // after SendHTML_Header() + ~2 KB of `webpage` String content —
-  // heap hit ~6 KB at handshake time and BearSSL aborted with
-  // HTTPC_ERROR_CONNECTION_LOST. Doing the request first and only
-  // rendering the page once we have (or don't have) the result gives us
-  // 10-15 KB more headroom.
-  webpage = "";
-
-  // V9.7: compose the check URL from the user-editable base. Ensure we
-  // have a trailing slash before appending the filename.
-  String base = String(OTAAuto_path);
-  if (!base.endsWith("/")) base += "/";
-  url = base + "version.json";
-
-  String payload;
-  int status = 0;
-  String errStr;
-
-  {
-    HTTPClient http;
-    http.setTimeout(10000);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.useHTTP10(true);
-    http.setReuse(false);
-
-    BearSSL::WiFiClientSecure secureClient;
-    WiFiClient *client = nullptr;
-    if (url.startsWith("https://")) {
-      // V9.5: shrink BearSSL in/out buffers from the 16 KB default to 512 B.
-      // Enough for the ~60-byte JSON response. Still fits TLS records.
-      secureClient.setInsecure();
-      secureClient.setBufferSizes(512, 512);
-      client = &secureClient;
-    } else {
-      client = &net;
-    }
-    http.begin(*client, url);
-
-    status = http.GET();
-    if (status > 0) {
-      payload = http.getString();
-    } else {
-      errStr = http.errorToString(status);
-      Serial.printf("HTTP error: %s\n", errStr.c_str());
-    }
-    http.end();
-  }  // HTTPClient + secureClient go out of scope here, heap freed
-
-  // Now we can render the page — TLS buffers are gone, heap is back.
-  StaticJsonDocument<256> firmware;
-
-  SendHTML_Header();
-
-  webpage += F("<h3 class='rcorners_m'>Check Firmware Update</h3><br>");
-  webpage += F("<table align='center'>");
-
-  if (status <= 0) {
-    webpage += F("<h3>Can not connect to REPO Update Server</h3>");
-    webpage += "<p><b>HTTP status:</b> " + String(status) + "</p>";
-    webpage += "<p><b>Error:</b> " + errStr + "</p>";
-    webpage += "<p><b>URL:</b> " + url + "</p>";
-    webpage += "<p><b>Heap at request:</b> low — restart the device or disable MQTT briefly to free memory, then try again</p>";
-  }
-
-  auto deserializeError = deserializeJson(firmware, payload);
-  serializeJson(firmware, Serial);
-
-  // if (firmware.success())     // json5
-  if (! deserializeError) {   // json6
-    strcpy(firmware_release, firmware["release"]);
-    strcpy(firmware_impact, firmware["impact"]);
-    strcpy(firmware_date, firmware["date"]);
-    webpage += F("<h3> Firmware found on Repository Server</h3>");
-    webpage += F("<table align='center'>");
-
-    webpage += F("<tr><th>Installed on Device</th><th style='width:50%'>Version Available </th><th>Date Released</th></tr>");
-    webpage += "<tr><td>"+String(firmware_installed)+"</td><td>"+String(firmware_release)+"</td><td>"+String(firmware_date)+"</td></tr>";
-    webpage += F("</table>");
-    // strcpy(blinds_speed, firmware["SPEED"]);
-
-    if (firmware_installed==firmware_release) {
-      webpage += F("<h3> No Update Required, You have latest version installed</h3>");
-    } else {
-      webpage += F("<h3>Update Required, Advised to install latest version</h3>");
-    }
-
-    if (String(firmware_impact).equalsIgnoreCase("HIGH")) {
-      webpage += F("<h3> Update has HIGH IMPACT to existing functions, resulting in possible AP configuration, see release notes for impact</h3>");
-    } else {
-      webpage += F("<h3> Update has LOW IMPACT to existing functions, provides bug fixes and enhancements only </h3>");
-    }
-  }
-
-  webpage += F("<a href='/firmware'><button>Manual</button></a>");
-  webpage += F("<a href='/firmwareauto'><button>Auto</button></a>");
-  webpage += F("<a href='/firmwareupdate'><button>Back</button></a>");
-  // webpage += F("<a href='/firmwareupdate'>[Back]</a><br><br>");
-  append_page_footer();
-  SendHTML_Content();
-  SendHTML_Stop();
-}
-
 // Battery_Check
 void Battery_Check() {
   // V9: cached int replaces String(char[]).toInt() allocation per call.
@@ -2613,25 +2414,15 @@ void setup() {
           strcpy(blinds_trim_adjust, json["blinds_trim_adjust"]);
           strcpy(blinds_slip_correction, json["blinds_slip_correction"]);
           strcpy(OTAAuto_path, json["OTAAuto_path"]);
-          // V9.4: replace the dead upstream mountain-eagle URL with the
-          // fork's default (runs on first V9.4+ boot after flashing from
-          // upstream or V9.1-V9.3).
-          if (strstr(OTAAuto_path, "mountaineagle-technologies") != nullptr) {
-            strcpy(OTAAuto_path, "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/");
+          // V9.8: field repurposed as a plain releases-page link
+          // (Auto/Check were removed). Migrate any v9.1-v9.7 stored value
+          // — including the dead mountain-eagle host and any
+          // /latest/download/ or /*.bin tail — to the fork's releases page.
+          if (strstr(OTAAuto_path, "mountaineagle-technologies") != nullptr ||
+              strstr(OTAAuto_path, "/latest/download") != nullptr ||
+              strstr(OTAAuto_path, ".bin") != nullptr) {
+            strcpy(OTAAuto_path, "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases");
             shouldSaveConfig = true;
-          }
-          // V9.7: field semantic changed — was "full URL to .bin", now
-          // "base URL that serves both version.json + mk-blindcontrol.bin".
-          // Strip a trailing `/mk-blindcontrol.bin` (and any other single
-          // filename) so V9.4-V9.6 installs migrate transparently. User's
-          // custom mirror URLs that already end with "/" are untouched.
-          size_t plen = strlen(OTAAuto_path);
-          if (plen > 0 && OTAAuto_path[plen - 1] != '/') {
-            char *lastSlash = strrchr(OTAAuto_path, '/');
-            if (lastSlash != nullptr && lastSlash != OTAAuto_path) {
-              *(lastSlash + 1) = '\0';  // keep the slash, drop the filename
-              shouldSaveConfig = true;
-            }
           }
           strcpy(tele_update_set, json["tele_update_set"]);
         }
@@ -2668,8 +2459,8 @@ void setup() {
   WiFiManagerParameter custom_update_password("password", "Password For Web Updater", update_password, 40);
   WiFiManagerParameter custom_battery_system("battery system", "Enable/Disable Battery System", battery_system, 12);
   WiFiManagerParameter custom_device_path("path", "Updater Path", update_path, 32);
-  WiFiManagerParameter custom_text25("<p>OTA Path to Firmware Update Server");
-  WiFiManagerParameter custom_OTAAuto_path("OTA Path", "Path to Remote OTA Server?", OTAAuto_path, 90);
+  WiFiManagerParameter custom_text25("<p>Releases page URL (shown as a link on the Firmware page — point at your fork's releases if you're not using the default)");
+  WiFiManagerParameter custom_OTAAuto_path("Releases URL", "Releases page URL", OTAAuto_path, 127);
   WiFiManagerParameter custom_text26("<p>Telemetry Period in Seconds, Default 60s");
   WiFiManagerParameter custom_tele_update_set("Telemetry Period", "Telemetry Period In Seconds", tele_update_set, 6);
   WiFiManagerParameter custom_text15("<h1>Custom Blind Control</h1>");
@@ -2868,12 +2659,9 @@ void setup() {
   httpServer.on("/setup", Config_Setup);
   httpServer.on("/firmware", Firmware_Update);
   httpServer.on("/firmwareupdate", Firmware_Update);
-  httpServer.on("/firmwareauto", OTAUpgrade);
-  httpServer.on("/firmwareauto", OTAUpgrade); // DUPE
   httpServer.on("/set-servo", Set_Servo);
   httpServer.on("/set-limits", handleMoveServo);
   // httpServer.on("/servoaction", Servo_Action);
-  httpServer.on("/firmwarecheck", FirmwareCheck);
   httpServer.on("/filemanager", File_Manager);
   httpServer.on("/saveconfig", Save_Config);
   httpServer.on("/submitconfig", Submit_Config);
@@ -2923,7 +2711,7 @@ void setup() {
   SSDP.setDeviceType("upnp:rootdevice");
   SSDP.setSerialNumber(ESP.getChipId());
   SSDP.setModelNumber("MK-Blindcontrol V8");
-  SSDP.setModelURL("https://github.com/mountain-pitt/mk-blindcontrol/wiki");
+  SSDP.setModelURL("https://github.com/TehRobot-Assistant/mk-blindcontrol/blob/main/docs/ABOUT.md");
   SSDP.setManufacturer("MK Smarthouse");
   SSDP.setManufacturerURL("https://www.mksmarthouse.com");
   SSDP.begin();
