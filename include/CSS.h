@@ -1,6 +1,7 @@
 void append_page_header() {
   webpage  = F("<!DOCTYPE html><html>");
   webpage += F("<head>");
+  webpage += F("<meta charset='UTF-8'>");
   webpage += F("<title>File MK-BlindControl</title>"); // NOTE: 1em = 16px
   webpage += F("<meta name='viewport' content='user-scalable=yes,initial-scale=1.0,width=device-width'>");
   webpage += F("<style>");

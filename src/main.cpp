@@ -1495,7 +1495,7 @@ void Firmware_Update() {
 
   webpage += F("<h3 class='rcorners_m'>Firmware Updater</h3><br>");
   webpage += F("<h3> MANUAL - Upload firmware from local folder. Download the latest <code>.bin</code> from the releases page below, then use Manual to flash it.</h3>");
-  webpage += F("<h3> Auto / Check removed in V9.8 — ESP8266 HTTPS is unreliable under live memory pressure. Manual upload is the supported path.</h3>");
+  webpage += F("<h3> Auto / Check removed in V9.8 - ESP8266 HTTPS is unreliable under live memory pressure. Manual upload is the supported path.</h3>");
   webpage += F("<a href='/firmware'><button>Manual</button></a>");
   webpage += "<a href='" + String(OTAAuto_path) + "' target='_blank' rel='noopener'><button>Releases</button></a>";
 
@@ -2459,7 +2459,7 @@ void setup() {
   WiFiManagerParameter custom_update_password("password", "Password For Web Updater", update_password, 40);
   WiFiManagerParameter custom_battery_system("battery system", "Enable/Disable Battery System", battery_system, 12);
   WiFiManagerParameter custom_device_path("path", "Updater Path", update_path, 32);
-  WiFiManagerParameter custom_text25("<p>Releases page URL (shown as a link on the Firmware page — point at your fork's releases if you're not using the default)");
+  WiFiManagerParameter custom_text25("<p>Releases page URL (shown as a link on the Firmware page - point at your fork's releases if you're not using the default)");
   WiFiManagerParameter custom_OTAAuto_path("Releases URL", "Releases page URL", OTAAuto_path, 127);
   WiFiManagerParameter custom_text26("<p>Telemetry Period in Seconds, Default 60s");
   WiFiManagerParameter custom_tele_update_set("Telemetry Period", "Telemetry Period In Seconds", tele_update_set, 6);
