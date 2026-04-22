@@ -22,6 +22,7 @@
 #include <LittleFS.h>
 #include <Servo.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>     // V9.4: HTTPS for firmware check + OTA against GitHub Releases
 #include <MQTTClient.h>           // https://github.com/256dpi/arduino-mqtt
 #include <DNSServer.h>
 #include <WiFiManager.h>          // https://github.com/tzapu/WiFiManager
@@ -36,7 +37,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "9.3"
+#define ServerVersion "9.4"
 String  webpage = "";
 
 #include "CSS.h"
@@ -67,7 +68,11 @@ char blinds_swing_direction[7] = "DOWN"; // Default
 char blinds_servo_install[7] = "LEFT";  // Default
 char blinds_trim_adjust[3] = "0";  // Default
 char blinds_slip_correction[5] = "ON";  // Default
-char OTAAuto_path[90] = "http://mountaineagle-technologies.com.au/tasmota/mk-blindcontrol.bin"; // updtate OTA_url server path and file
+// V9.4: default OTA path points at the fork's always-latest release asset.
+// WiFiClientSecure + setInsecure + follow-redirects handles the GitHub 302
+// chain to objects.githubusercontent.com transparently. User can override
+// in the web UI (Config → OTAAuto path) to point at a private mirror.
+char OTAAuto_path[128] = "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin";
 char tele_battery_set[4] = "60";   // in seconds
 char tele_update_set[4] = "60";
 char open_limit_set[5] = ""; // open limit set, set by user and program can be inverter
@@ -89,8 +94,10 @@ char software_variant[7] = "00";   // Legacy field, unused for display.
 // V9.3: user-visible firmware version string. Decoupled from `software_version`
 // so we can display the true fork version in the web UI + MQTT `sw_version`
 // attribute without triggering WiFiManager's JSON-blob-size reset.
-String firmware_installed = "V9.3";
-String url = "http://mountaineagle-technologies.com.au/tasmota/version.json";
+String firmware_installed = "V9.4";
+// V9.4: the check URL now points at a version.json served from the fork's
+// main branch. CI keeps it in sync with whatever the latest release is.
+String url = "https://raw.githubusercontent.com/TehRobot-Assistant/mk-blindcontrol/main/version.json";
 const char* POWER_TOPIC = "cmnd/power/POWER";
 char data[80];
 int msgcommand = 180;  // payload converted to initger number
@@ -989,10 +996,21 @@ void OTAUpgrade() {
   webpage += F("<a href='/reboot'><button>Reboot</button></a>");
   SendHTML_Content();
 
-  // ESPhttpUpdate.rebootOnUpdate(false);
-  // t_httpUpdate_return ret = ESPhttpUpdate.update(net, OTAAuto_path);
-  t_httpUpdate_return ret = ESPhttpUpdate.update(net, OTAAuto_path);
-  // t_httpUpdate_return ret = ESPhttpUpdate.update(net, "http://mountaineagle-technologies.com.au/tasmota/mk-blindcontrol.bin");
+  // V9.4: pick plain or secure client based on URL scheme. ESPhttpUpdate
+  // follows redirects; with GitHub releases the stable /latest/download/
+  // URL emits a 302 → objects.githubusercontent.com (HTTPS). Without
+  // setFollowRedirects the update fails silently. setInsecure skips cert
+  // verification (BearSSL's full cert chain would be ~30 KB of flash on
+  // top of what we already carry, for a read-only public download).
+  ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  WiFiClientSecure secureClient;
+  t_httpUpdate_return ret;
+  if (String(OTAAuto_path).startsWith("https://")) {
+    secureClient.setInsecure();
+    ret = ESPhttpUpdate.update(secureClient, OTAAuto_path);
+  } else {
+    ret = ESPhttpUpdate.update(net, OTAAuto_path);
+  }
 
   switch (ret) {
     case HTTP_UPDATE_FAILED:
@@ -1641,7 +1659,7 @@ void Config_Setup() {
   webpage += "<tr><td>Admin Password</td><td>"+String(update_password)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
   webpage += "<tr><td>OTAAuto path</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
-  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'http://mountaineagle-technologies.com/tasmota/mk-blindcontrol.bin'></td></tr>");
+  webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin'></td></tr>");
   webpage += "<tr><td>Blind Speed</td><td>"+String(blinds_speed)+"</td></td>"; // tr
   webpage += F("<td><select name='input_blinds_speed'><option value=''>         </option><option value='SLOW'>SLOW</option><option value='FAST'>FAST</option></select></td></tr>");
   webpage += "<tr><td>Motor Installed Side</td><td>"+String(blinds_servo_install)+"</td></td>"; // tr
@@ -2284,6 +2302,10 @@ void checkButton() {
 }
 
 // FirmwareCheck - Allocate a 1024-byte buffer for the JSON document.
+// V9.4: HTTPS support via WiFiClientSecure + setInsecure (we just read a
+// public JSON; cert verification would be nice but BearSSL on ESP8266 is
+// memory-heavy and unreliable). Follows redirects so it works with
+// GitHub Pages / raw.githubusercontent.com / private mirrors equally.
 void FirmwareCheck() {
   char firmware_release[7] = "Vx.xx";
   char firmware_impact[9] = "UNKNOWN";
@@ -2295,10 +2317,22 @@ void FirmwareCheck() {
 
   webpage += F("<h3 class='rcorners_m'>Check Firmware Update</h3><br>");
   webpage += F("<table align='center'>");
-  // webpage += F("<table align='center'>");
 
-  http.setTimeout(1000);
-  http.begin(net, url);
+  // V9.4: request timeout bumped from 1 s to 10 s — GitHub's CDN handshake
+  // can take 2-4 s over HTTPS on a constrained device, and 1 s was timing
+  // out the check even when the server was reachable.
+  http.setTimeout(10000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  WiFiClient *client = nullptr;
+  WiFiClientSecure secureClient;
+  if (url.startsWith("https://")) {
+    secureClient.setInsecure();
+    client = &secureClient;
+  } else {
+    client = &net;
+  }
+  http.begin(*client, url);
 
   int status = http.GET();
  
@@ -2535,6 +2569,15 @@ void setup() {
           strcpy(blinds_trim_adjust, json["blinds_trim_adjust"]);
           strcpy(blinds_slip_correction, json["blinds_slip_correction"]);
           strcpy(OTAAuto_path, json["OTAAuto_path"]);
+          // V9.4: one-time migration. Users upgrading from upstream V8 or
+          // V9.1-V9.3 have the dead mountain-eagle URL persisted in their
+          // /V8.json. Replace it with the fork's default so the Auto-OTA
+          // button works out of the box — user can still override from
+          // the Config page if they want their own mirror.
+          if (strstr(OTAAuto_path, "mountaineagle-technologies") != nullptr) {
+            strcpy(OTAAuto_path, "https://github.com/TehRobot-Assistant/mk-blindcontrol/releases/latest/download/mk-blindcontrol.bin");
+            shouldSaveConfig = true;
+          }
           strcpy(tele_update_set, json["tele_update_set"]);
         }
 
