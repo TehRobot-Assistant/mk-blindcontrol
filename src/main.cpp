@@ -37,7 +37,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "9.5"
+#define ServerVersion "9.6"
 String  webpage = "";
 
 #include "CSS.h"
@@ -94,7 +94,7 @@ char software_variant[7] = "00";   // Legacy field, unused for display.
 // V9.3: user-visible firmware version string. Decoupled from `software_version`
 // so we can display the true fork version in the web UI + MQTT `sw_version`
 // attribute without triggering WiFiManager's JSON-blob-size reset.
-String firmware_installed = "V9.5";
+String firmware_installed = "V9.6";
 // V9.4: the check URL now points at a version.json served from the fork's
 // main branch. CI keeps it in sync with whatever the latest release is.
 String url = "https://raw.githubusercontent.com/TehRobot-Assistant/mk-blindcontrol/main/version.json";
@@ -2315,57 +2315,65 @@ void FirmwareCheck() {
   char firmware_release[7] = "Vx.xx";
   char firmware_impact[9] = "UNKNOWN";
   char firmware_date[12] = "99/99/9999";
-  HTTPClient http;
-  DynamicJsonDocument firmware(1024);    // json6
+
+  // V9.6: do ALL the HTTPS work BEFORE any page rendering, so BearSSL's
+  // TLS handshake has maximum heap available. v9.5 was calling http.GET()
+  // after SendHTML_Header() + ~2 KB of `webpage` String content —
+  // heap hit ~6 KB at handshake time and BearSSL aborted with
+  // HTTPC_ERROR_CONNECTION_LOST. Doing the request first and only
+  // rendering the page once we have (or don't have) the result gives us
+  // 10-15 KB more headroom.
+  webpage = "";
+
+  String payload;
+  int status = 0;
+  String errStr;
+
+  {
+    HTTPClient http;
+    http.setTimeout(10000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.useHTTP10(true);
+    http.setReuse(false);
+
+    BearSSL::WiFiClientSecure secureClient;
+    WiFiClient *client = nullptr;
+    if (url.startsWith("https://")) {
+      // V9.5: shrink BearSSL in/out buffers from the 16 KB default to 512 B.
+      // Enough for the ~60-byte JSON response. Still fits TLS records.
+      secureClient.setInsecure();
+      secureClient.setBufferSizes(512, 512);
+      client = &secureClient;
+    } else {
+      client = &net;
+    }
+    http.begin(*client, url);
+
+    status = http.GET();
+    if (status > 0) {
+      payload = http.getString();
+    } else {
+      errStr = http.errorToString(status);
+      Serial.printf("HTTP error: %s\n", errStr.c_str());
+    }
+    http.end();
+  }  // HTTPClient + secureClient go out of scope here, heap freed
+
+  // Now we can render the page — TLS buffers are gone, heap is back.
+  StaticJsonDocument<256> firmware;
 
   SendHTML_Header();
 
   webpage += F("<h3 class='rcorners_m'>Check Firmware Update</h3><br>");
   webpage += F("<table align='center'>");
 
-  // V9.4: 10 s timeout — GitHub's CDN handshake is 2-4 s on a constrained device.
-  // V9.5: force HTTP/1.0 (GitHub's CDN doesn't need chunked + it's less memory).
-  http.setTimeout(10000);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.useHTTP10(true);
-  http.setReuse(false);
-
-  BearSSL::WiFiClientSecure secureClient;
-  WiFiClient *client = nullptr;
-  if (url.startsWith("https://")) {
-    // V9.5: shrink BearSSL in/out buffers from the 16 KB default to 512 B.
-    // On a running unit with MQTT + WiFi + SSDP we have ~38 KB free heap;
-    // TLS handshake with default buffers OOMs silently and http.GET()
-    // returns a generic error. 512 B is enough for the ~60-byte JSON
-    // response and survives live memory pressure.
-    secureClient.setInsecure();
-    secureClient.setBufferSizes(512, 512);
-    client = &secureClient;
-  } else {
-    client = &net;
-  }
-  http.begin(*client, url);
-
-  int status = http.GET();
-
   if (status <= 0) {
-    String errStr = http.errorToString(status);
-    Serial.printf("HTTP error: %s\n", errStr.c_str());
-    // V9.5: surface the actual error in the UI so the user can diagnose
-    // without a USB-serial cable. "Can not connect" was hiding OOM, cert
-    // rejection, DNS failure, and timeout under one message.
     webpage += F("<h3>Can not connect to REPO Update Server</h3>");
     webpage += "<p><b>HTTP status:</b> " + String(status) + "</p>";
     webpage += "<p><b>Error:</b> " + errStr + "</p>";
     webpage += "<p><b>URL:</b> " + url + "</p>";
-    webpage += "<p><b>Heap free:</b> " + String(ESP.getFreeHeap()) + " B</p>";
+    webpage += "<p><b>Heap at request:</b> low — restart the device or disable MQTT briefly to free memory, then try again</p>";
   }
-
-  String payload = http.getString();
-  // const String& payload = http.getString();
-  http.end();
-
-  // JsonObject& firmware = jsonBuffer.parseObject(payload);
 
   auto deserializeError = deserializeJson(firmware, payload);
   serializeJson(firmware, Serial);
