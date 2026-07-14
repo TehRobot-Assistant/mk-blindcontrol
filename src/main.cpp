@@ -37,7 +37,7 @@
 #include <HAMqttDevice.h> // HA implementation
 #include <SPI.h>
 
-#define ServerVersion "9.8"
+#define ServerVersion "10.0"
 String  webpage = "";
 
 #include "CSS.h"
@@ -99,7 +99,7 @@ char software_variant[7] = "00";   // Legacy field, unused for display.
 // V9.3: user-visible firmware version string. Decoupled from `software_version`
 // so we can display the true fork version in the web UI + MQTT `sw_version`
 // attribute without triggering WiFiManager's JSON-blob-size reset.
-String firmware_installed = "V9.8";
+String firmware_installed = "V10.0";
 const char* POWER_TOPIC = "cmnd/power/POWER";
 char data[80];
 int msgcommand = 180;  // payload converted to initger number
