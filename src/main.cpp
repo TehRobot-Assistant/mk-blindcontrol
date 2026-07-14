@@ -2330,14 +2330,17 @@ void Battery_Check() {
 
     int i, perc;
 
-    perc = 100;
+    perc = 100; // default: above max voltage
 
     for (i=20; i>=0; i--) {
       if (fVoltageMatrix[i][0] >= fVoltage) {
-        perc = fVoltageMatrix[i + 1][1];
+        perc = (int)fVoltageMatrix[i][1]; // voltage at row i brackets fVoltage from above
         break;
       }
     }
+    // clamp: if fVoltage is below all thresholds, perc is already 0 (row 20)
+    if (perc < 0)   perc = 0;
+    if (perc > 100) perc = 100;
 
     // Battery_Cap = perc;
     Battery_Voltage = fVoltage;
