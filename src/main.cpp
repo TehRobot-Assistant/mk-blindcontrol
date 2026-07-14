@@ -559,8 +559,18 @@ void configupgrade() {
   // end read
 }
 
+// requireAuth — returns true if the request is authenticated (or no password set).
+// Call first in every state-changing handler; return immediately on false.
+bool requireAuth() {
+  if (update_password[0] == '\0') return true; // fresh device — no password set
+  if (httpServer.authenticate(update_username, update_password)) return true;
+  httpServer.requestAuthentication();
+  return false;
+}
+
 // handleServo - handle servo control
 void handleServo() {
+  if (!requireAuth()) return;
   String POS = httpServer.arg("servoPOS");
   BufferPos = POS;
   int pos = POS.toInt();
@@ -882,6 +892,7 @@ void DownloadFile(String filename) {
 
 // File_Upload
 void File_Upload() {
+  if (!requireAuth()) return;
   append_page_header();
   webpage += F("<h3>Select File to Upload</h3>");
   webpage += F("<FORM action='/fupload' method='post' enctype='multipart/form-data'>");
@@ -927,6 +938,7 @@ void SPIFFS_file_delete(String filename) { // Delete the file
 
 // File_Delete
 void File_Delete() {
+  if (!requireAuth()) return;
   if (httpServer.args() > 0 ) { // Arguments were received
     if (httpServer.hasArg("delete")) {
       SPIFFS_file_delete(httpServer.arg(0));
@@ -990,6 +1002,7 @@ void get_save_state() {
 
 // handleMoveServo
 void handleMoveServo() {
+  if (!requireAuth()) return;
   // Attach the servo to the servo object
   //(13, 544, 2200);
   // myservo[0].write(ServoPos);
@@ -1030,6 +1043,7 @@ void handleMoveServo() {
 
 // SetOpenLimit
 void SetOpenLimit() {
+  if (!requireAuth()) return;
   SendHTML_Header();
   webpage += F("<h3 class='rcorners_m'>Set Open and Closed Limits</h3><br>");
   Serial.print("Open Limit Set To");
@@ -1047,6 +1061,7 @@ void SetOpenLimit() {
 
 // SetClosedLimit
 void SetClosedLimit() {
+  if (!requireAuth()) return;
   SendHTML_Header();
   webpage += F("<h3 class='rcorners_m'>Set Open and Closed Limits</h3><br>");
   Serial.print("Closed Limit Set To");
@@ -1064,6 +1079,7 @@ void SetClosedLimit() {
 
 // ResetLimits
 void ResetLimits() {
+  if (!requireAuth()) return;
   SendHTML_Header();
   webpage += F("<h3 class='rcorners_m'>Set Open and Closed Limits</h3><br>");
   Serial.print("Reset Limits Set To Default");
@@ -1137,7 +1153,7 @@ void tele_update() {
   // V9: cached int replaces String(char[]).toInt() allocation per call.
   const unsigned long telePeriodMs = (unsigned long)cachedTeleUpdateSec * 1000UL;
 
-  if ((millis() > time_now + telePeriodMs) || (reboot==1)) {
+  if ((millis() - time_now >= telePeriodMs) || (reboot==1)) {
     // start new json coding
     StaticJsonDocument<512> rootstate;
 
@@ -1181,8 +1197,6 @@ void tele_update() {
     publish_state();
 
     client.publish("tele/" + _identifier + "/STATE", JSONmessageBufferstate); // full telementry only
-
-    SSDP.begin();
   }
 }
 
@@ -1473,6 +1487,7 @@ void messageReceived(String &topic, String &payload) {
 
 // File_Manager
 void File_Manager() {
+  if (!requireAuth()) return;
   SendHTML_Header();
 
   // webpage += "<tr><td>"+String(software_version)+"</td>";
@@ -1506,6 +1521,7 @@ void Firmware_Update() {
 
 // Device_Reboot
 void Device_Reboot() {
+  if (!requireAuth()) return;
   SendHTML_Header();
 
   webpage += F("<h3 class='rcorners_m'>Restart Controller</h3><br>");
@@ -1527,6 +1543,7 @@ void Device_Reboot() {
 
 // Set_Servo
 void Set_Servo() {
+  if (!requireAuth()) return;
   SendHTML_Header();
 
   webpage += F("<h3 class='rcorners_m'>Aligning Servo Motor</h3><br>");
@@ -1565,6 +1582,7 @@ void Set_Servo() {
 
 // Config_Setup
 void Config_Setup() {
+  if (!requireAuth()) return;
   // <input type="text" ng-model="inputText" placeholder="{{somePlaceholder}}" />
   SendHTML_Header();
 
@@ -1580,14 +1598,14 @@ void Config_Setup() {
   webpage += "<tr><td>MQTT Server</td><td>"+String(mqtt_server)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_server'  placeholder = '192.168.0.100'></td></tr>");
   webpage += "<tr><td>MQTT Port</td><td>"+String(mqtt_port)+"</td></td>"; // tr
-  webpage += F("<td><input class='text' style='width:90%' name='input_host'  placeholder = '1883'></td></tr>");
+  webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_port'  placeholder = '1883'></td></tr>");
   webpage += "<tr><td>MQTT User ID</td><td>"+String(mqtt_username)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_username'  placeholder = 'openhabian'></td></tr>");
-  webpage += "<tr><td>MQTT Password</td><td>"+String(mqtt_password)+"</td></td>"; // tr
+  webpage += "<tr><td>MQTT Password</td><td>"+(strlen(mqtt_password) ? "********" : "(not set)")+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_password'  placeholder = 'password'></td></tr>");
   webpage += "<tr><td>MQTT Authentication</td><td>"+String(mqtt_isAuthentication)+"</td></td>"; // tr
   webpage += F("<td><select name='input_mqtt_isAuthentication'><option value=''>         </option><option value='FALSE'>FALSE</option><option value='TRUE'>TRUE</option></select></td></tr>");
-  webpage += "<tr><td>Admin Password</td><td>"+String(update_password)+"</td></td>"; // tr
+  webpage += "<tr><td>Admin Password</td><td>"+(strlen(update_password) ? "********" : "(not set)")+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
   webpage += "<tr><td>Releases URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases'></td></tr>");
@@ -1708,6 +1726,7 @@ void HomePage() {
 
 // File_Download
 void File_Download() { // This gets called twice, the first pass selects the input, the second pass then processes the command line arguments
+  if (!requireAuth()) return;
   if (httpServer.args() > 0 ) { // Arguments were received
     if (httpServer.hasArg("download")) {
       DownloadFile(httpServer.arg(0));
@@ -1720,6 +1739,7 @@ void File_Download() { // This gets called twice, the first pass selects the inp
 // handleFileUpload
 File UploadFile;
 void handleFileUpload() { // upload a new file to the Filing system
+  if (!requireAuth()) return;
   // See https://github.com/esp8266/Arduino/tree/master/libraries/ESP8266WebServer/srcv
   // For further information on 'status' structure, there are other reasons such as a failed transfer that could be used
   HTTPUpload& uploadfile = httpServer.upload(); 
@@ -1764,6 +1784,7 @@ void handleFileUpload() { // upload a new file to the Filing system
 #ifdef ESP32
 // SPIFFS_dir for ESP32
 void SPIFFS_dir() {
+  if (!requireAuth()) return;
   if (SPIFFS_present) {
     // File root = SPIFFS.open("/"); // old system
     File root = LittleFS.open("/");
@@ -1843,6 +1864,7 @@ void printDirectory(const char * dirname, uint8_t levels) {
 // SPIFFS_dir for ESP8266
 #ifdef ESP8266
 void SPIFFS_dir() {
+  if (!requireAuth()) return;
   String str;
 
   if (SPIFFS_present) {
@@ -1904,6 +1926,7 @@ void SPIFFS_dir() {
 
 // Submit_Config - submit config for changes
 void Submit_Config() {
+  if (!requireAuth()) return;
   // copy update to current variables
   SendHTML_Header();
 
@@ -2024,6 +2047,7 @@ void Submit_Config() {
 
 // Save_Config - save configuration to spiffs
 void Save_Config() {
+  if (!requireAuth()) return;
   DynamicJsonDocument json(1024);   // json6
 
   json["host"] = host;
@@ -2101,10 +2125,10 @@ void Save_Config() {
 void clickEvent() {
   if ((HA_Blind_State == "OPEN") || (HA_Blind_State == "OPENED")) {
     moveServo(String(close_limit_set).toInt());  // new method
-    HA_Blind_State == "CLOSED";
+    HA_Blind_State = "CLOSED";
   } else {
     moveServo(String(open_limit_set).toInt());  // new method
-    HA_Blind_State == "OPENED";
+    HA_Blind_State = "OPENED";
   }
 
   HA_State();
@@ -2117,7 +2141,7 @@ void clickEvent() {
 void doubleClickEvent() {
   // code with slip correction added. i.e. if closed go fully open then back to 50%
   // client.publish("stat/"+_identifier+"/ClickEventprocess", "DoublePress");
-  HA_Blind_State == "OPEN";
+  HA_Blind_State = "OPEN";
   moveServo(90);
   HA_State();
   process_state();
@@ -2136,6 +2160,7 @@ void holdEvent() {
 
 // longHoldEvent - Reset Controller to default and wipe all sata restart in AP mode
 void longHoldEvent() {
+  if (!requireAuth()) return;
   // client.publish("stat/"+_identifier+"/ClickEvent", "LongPress");
   SendHTML_Header();
 
@@ -2157,6 +2182,14 @@ void longHoldEvent() {
   LittleFS.format(); // refomats SFIFFS erases all files clean setup
   delay(10000);
   ESP.restart(); // better option then ESP.reset()
+}
+
+// resetcmdHttp - authenticated HTTP wrapper for /resetcmd route
+// longHoldEvent is also called from physical-button code, so auth is added
+// here rather than inside longHoldEvent itself.
+void resetcmdHttp() {
+  if (!requireAuth()) return;
+  longHoldEvent();
 }
 
 // checkButton
@@ -2237,7 +2270,7 @@ void Battery_Check() {
   // V9: cached int replaces String(char[]).toInt() allocation per call.
   const unsigned long batteryPeriodMs = (unsigned long)cachedTeleBatterySec * 1000UL;
 
-  if (millis() > time_now_2 + batteryPeriodMs) {
+  if (millis() - time_now_2 >= batteryPeriodMs) {
     int nVoltageRaw = analogRead(A0);
     float fVoltage = (float)nVoltageRaw * 0.00486;
     String S_battery_capacity = battery_capacity;
@@ -2639,7 +2672,6 @@ void setup() {
 
   MDNS.begin(host);
 
-  httpUpdater.setup(&httpServer);
   httpUpdater.setup(&httpServer, update_path, update_username, update_password);
 
   // new code
@@ -2667,7 +2699,7 @@ void setup() {
   httpServer.on("/submitconfig", Submit_Config);
   // httpServer.on("/action_page", handleForm);
   httpServer.on("/exit", HomePage);
-  httpServer.on("/resetcmd", longHoldEvent);
+  httpServer.on("/resetcmd", resetcmdHttp);
   httpServer.on("/setPOS", handleServo); //--> Sets servo position from Web request
   httpServer.on("/SetOpenLimit", SetOpenLimit);
   httpServer.on("/SetClosedLimit", SetClosedLimit);
