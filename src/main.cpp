@@ -559,13 +559,14 @@ void configupgrade() {
   // end read
 }
 
-// requireAuth — returns true if the request is authenticated (or no password set).
-// Call first in every state-changing handler; return immediately on false.
+// requireAuth — returns false and sends a 401 challenge if credentials fail.
+// Call as the first statement in every state-changing HTTP handler.
 bool requireAuth() {
-  if (update_password[0] == '\0') return true; // fresh device — no password set
-  if (httpServer.authenticate(update_username, update_password)) return true;
-  httpServer.requestAuthentication();
-  return false;
+  if (!httpServer.authenticate(update_username, update_password)) {
+    httpServer.requestAuthentication();
+    return false;
+  }
+  return true;
 }
 
 // handleServo - handle servo control
@@ -1601,11 +1602,11 @@ void Config_Setup() {
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_port'  placeholder = '1883'></td></tr>");
   webpage += "<tr><td>MQTT User ID</td><td>"+String(mqtt_username)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_username'  placeholder = 'openhabian'></td></tr>");
-  webpage += "<tr><td>MQTT Password</td><td>"+(strlen(mqtt_password) ? "********" : "(not set)")+"</td></td>"; // tr
+  webpage += "<tr><td>MQTT Password</td><td>"+(strlen(mqtt_password)>0 ? String("&bull;&bull;&bull;&bull;") : String("(not set)"))+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_password'  placeholder = 'password'></td></tr>");
   webpage += "<tr><td>MQTT Authentication</td><td>"+String(mqtt_isAuthentication)+"</td></td>"; // tr
   webpage += F("<td><select name='input_mqtt_isAuthentication'><option value=''>         </option><option value='FALSE'>FALSE</option><option value='TRUE'>TRUE</option></select></td></tr>");
-  webpage += "<tr><td>Admin Password</td><td>"+(strlen(update_password) ? "********" : "(not set)")+"</td></td>"; // tr
+  webpage += "<tr><td>Admin Password</td><td>"+(strlen(update_password)>0 ? String("&bull;&bull;&bull;&bull;") : String("(not set)"))+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
   webpage += "<tr><td>Releases URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases'></td></tr>");
