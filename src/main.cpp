@@ -758,7 +758,7 @@ void HA_Discovery() {
   _identifier.replace(' ', '_');
   _identifier.toLowerCase();
 
-  StaticJsonDocument<800> root;
+  StaticJsonDocument<1200> root;
 
   root["platform"] = "mqtt";
   root["~"] = _identifier;
@@ -776,9 +776,12 @@ void HA_Discovery() {
   root["payload_not_available"] = "Offline";
   // root["value_template"] = "{% if value == '100' -%}closed{%- else -%}open{%- endif %}";
 
+  root["position_topic"] = "stat/"+_identifier+"/position";
+  root["set_position_topic"] = "cmnd/"+_identifier+"/POWER";
+  root["position_open"] = 0;
+  root["position_closed"] = 100;
+
   if (String(auto_discovery) == "ENABLED-TILT") {
-    root["position_open"] = 0;
-    root["position_closed"] = 100;
     root["tilt_command_topic"] = "cmnd/"+_identifier+"/tilt";
     root["tilt_status_topic"] = "stat/"+_identifier+"/tilt-state";
     root["tilt_min"] = 0;
@@ -788,6 +791,14 @@ void HA_Discovery() {
   }
 
   root["device_class"] = "blind";
+
+  JsonObject device = root.createNestedObject("device");
+  JsonArray identifiers = device.createNestedArray("identifiers");
+  identifiers.add(_identifier);
+  device["name"] = String(mqtt_topic);
+  device["manufacturer"] = "MK-Smarthouse";
+  device["model"] = "MK-BlindControl";
+  device["sw_version"] = String(firmware_installed);
 
   size_t len = measureJson(root);   // JSON6
   // size_t len = root.measureLength();    // JSON5
