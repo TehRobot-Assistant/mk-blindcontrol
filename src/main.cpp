@@ -699,49 +699,6 @@ void HA_State() {
   }
 }
 
-// HAMDiscovery
-void HAMDiscovery() {
-  _name = String(mqtt_topic);  // aka mqtt device ID will change in main program
-  HAMqttDevice mkblindcontrol(_name, HAMqttDevice::COVER);
-
-  // Configure extra config vars for Home assistant
-  mkblindcontrol
-    .enableAttributesTopic()
-    //.addConfigVar("cmd_t", "cmnd/"+_identifier+"/POWER")   // command topic
-    //.addConfigVar("stat_t", "stat/"+_identifier+"/STATE")    // STATE topic
-    .addConfigVar("retain", "false")   // retain flag
-    .addConfigVar("availability_topic", "tele/"+_identifier+"/LWT")
-    .addConfigVar("payload_open", "OPEN")   // pay load open
-    .addConfigVar("payload_close", "CLOSED")   // payload closed
-    .addConfigVar("payload_stop", "STOP")   // pay load stop
-    .addConfigVar("stat_open", "0")   // state open
-    .addConfigVar("state_opening", "opening")   // state opening
-    .addConfigVar("state_closed", "100")   // state closed
-    .addConfigVar("state_closing", "closing")   // state closing
-    .addConfigVar("payload_available", "online")   // payload available
-    .addConfigVar("payload_not_available", "offline")   // payload not avilable
-    .addConfigVar("optimistic", "false")   // optimistic
-    .addConfigVar("value_template", "{{ value.x }}")   // value template
-    .addConfigVar("position_template", "{{ value.y }}")   // position value
-    .addConfigVar("tilt_command_topic", "cmnd/"+_identifier+"/tilt")   // tilt command topic
-    .addConfigVar("tilt_status_topic", "stat/"+_identifier+"/STATE")   // tilt status topic
-    .addConfigVar("tilt_status_template", "{{ value_json['PWM']['PWM1'] }}")   // tilt status template
-    .addConfigVar("tilt_min", "0")   // tilt minium
-    .addConfigVar("tilt_max", "100")   // tilt maxium
-    .addConfigVar("tilt_closed_value", "0")   // tilt closed value
-    .addConfigVar("tilt_opened_value", "100")   // tilt open value
-    .addConfigVar("device_class", "blind");   // device class
-
-  int len2 = mkblindcontrol.getConfigPayload().length()+1;
-  client.publish(mkblindcontrol.getConfigTopic(), mkblindcontrol.getConfigPayload(), len2, true);
-
-  mkblindcontrol
-    .clearAttributes()
-    .addAttribute("IP", WiFi.localIP().toString());
-
-  client.publish(mkblindcontrol.getAttributesTopic(), mkblindcontrol.getAttributesPayload());
-}
-
 // HA_Discovery - HA Auto descovery type1
 void HA_Discovery() {
   // Serial.print("Generating Homeassistant Discovery ");
