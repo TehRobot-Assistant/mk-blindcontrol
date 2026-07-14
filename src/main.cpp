@@ -1958,108 +1958,108 @@ void Submit_Config() {
   SendHTML_Header();
 
   if (httpServer.arg("input_host")!= "") {
-    strcpy(host, httpServer.arg("input_host").c_str());
+    strlcpy(host, httpServer.arg("input_host").c_str(), sizeof(host));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_topic")!= "") {
-    strcpy(mqtt_topic, httpServer.arg("input_mqtt_topic").c_str());
+    strlcpy(mqtt_topic, httpServer.arg("input_mqtt_topic").c_str(), sizeof(mqtt_topic));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_server")!= "") {
-    strcpy(mqtt_server, httpServer.arg("input_mqtt_server").c_str());
+    strlcpy(mqtt_server, httpServer.arg("input_mqtt_server").c_str(), sizeof(mqtt_server));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_port")!= "") {
-    strcpy(mqtt_port, httpServer.arg("input_mqtt_port").c_str());
+    strlcpy(mqtt_port, httpServer.arg("input_mqtt_port").c_str(), sizeof(mqtt_port));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_username")!= "") {
-    strcpy(mqtt_username, httpServer.arg("input_mqtt_username").c_str());
+    strlcpy(mqtt_username, httpServer.arg("input_mqtt_username").c_str(), sizeof(mqtt_username));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_password")!= "") {
-    strcpy(mqtt_password, httpServer.arg("input_mqtt_password").c_str());
+    strlcpy(mqtt_password, httpServer.arg("input_mqtt_password").c_str(), sizeof(mqtt_password));
     reboot = 1;
   }
 
   if (httpServer.arg("input_mqtt_isAuthentication")!= "") {
-    strcpy(mqtt_isAuthentication, httpServer.arg("input_mqtt_isAuthentication").c_str());
+    strlcpy(mqtt_isAuthentication, httpServer.arg("input_mqtt_isAuthentication").c_str(), sizeof(mqtt_isAuthentication));
   }
 
   if (httpServer.arg("input_update_password")!= "") {
-    strcpy(update_password, httpServer.arg("input_update_password").c_str());
+    strlcpy(update_password, httpServer.arg("input_update_password").c_str(), sizeof(update_password));
   }
 
   if (httpServer.arg("input_OTAAuto_path")!= "") {
-    strcpy(OTAAuto_path, httpServer.arg("input_OTAAuto_path").c_str());
+    strlcpy(OTAAuto_path, httpServer.arg("input_OTAAuto_path").c_str(), sizeof(OTAAuto_path));
   }
 
   if (httpServer.arg("input_blinds_speed")!= "") {
-    strcpy(blinds_speed, httpServer.arg("input_blinds_speed").c_str());
+    strlcpy(blinds_speed, httpServer.arg("input_blinds_speed").c_str(), sizeof(blinds_speed));
   }
 
   if (httpServer.arg("input_blinds_servo_install")!= "") {
-    strcpy(blinds_servo_install, httpServer.arg("input_blinds_servo_install").c_str());
+    strlcpy(blinds_servo_install, httpServer.arg("input_blinds_servo_install").c_str(), sizeof(blinds_servo_install));
     reboot = 1;
     strcpy(close_limit_set, "");
     strcpy(open_limit_set, "");
   }
 
   if (httpServer.arg("input_blinds_swing_direction")!= "") {
-    strcpy(blinds_swing_direction, httpServer.arg("input_blinds_swing_direction").c_str());
+    strlcpy(blinds_swing_direction, httpServer.arg("input_blinds_swing_direction").c_str(), sizeof(blinds_swing_direction));
     reboot = 1;
     strcpy(close_limit_set, "");
     strcpy(open_limit_set, "");
   }
 
   // if (httpServer.arg("input_blinds_trim_adjust")!= "") {
-  //   strcpy(blinds_trim_adjust, httpServer.arg("input_blinds_trim_adjust").c_str());
+  //   strlcpy(blinds_trim_adjust, httpServer.arg("input_blinds_trim_adjust").c_str(), sizeof(blinds_trim_adjust));
   // }
 
   if (httpServer.arg("input_blinds_slip_correction")!= "") {
-    strcpy(blinds_slip_correction, httpServer.arg("input_blinds_slip_correction").c_str());
+    strlcpy(blinds_slip_correction, httpServer.arg("input_blinds_slip_correction").c_str(), sizeof(blinds_slip_correction));
   }
 
   if (httpServer.arg("input_tele_update_set")!= "") {
-    strcpy(tele_update_set, httpServer.arg("input_tele_update_set").c_str());
+    strlcpy(tele_update_set, httpServer.arg("input_tele_update_set").c_str(), sizeof(tele_update_set));
   }
 
   if (httpServer.arg("input_battery_system")!= "") {
-    strcpy(battery_system, httpServer.arg("input_battery_system").c_str());
+    strlcpy(battery_system, httpServer.arg("input_battery_system").c_str(), sizeof(battery_system));
   }
 
   if (httpServer.arg("input_remote_switch")!= "") {
-    strcpy(remote_switch, httpServer.arg("input_remote_switch").c_str());
+    strlcpy(remote_switch, httpServer.arg("input_remote_switch").c_str(), sizeof(remote_switch));
   }
 
   if (httpServer.arg("input_battery_capacity")!= "") {
-    strcpy(battery_capacity, httpServer.arg("input_battery_capacity").c_str());
+    strlcpy(battery_capacity, httpServer.arg("input_battery_capacity").c_str(), sizeof(battery_capacity));
   }
 
   if (httpServer.arg("input_system_power")!= "") {
-    strcpy(system_power, httpServer.arg("input_system_power").c_str());
+    strlcpy(system_power, httpServer.arg("input_system_power").c_str(), sizeof(system_power));
   }
 
   if (httpServer.arg("input_tele_battery_set")!= "") {
-    strcpy(tele_battery_set, httpServer.arg("input_tele_battery_set").c_str());
+    strlcpy(tele_battery_set, httpServer.arg("input_tele_battery_set").c_str(), sizeof(tele_battery_set));
   }
 
   if (httpServer.arg("input_auto_discovery")!= "") {
-    strcpy(auto_discovery, httpServer.arg("input_auto_discovery").c_str());
+    strlcpy(auto_discovery, httpServer.arg("input_auto_discovery").c_str(), sizeof(auto_discovery));
     reboot = 1;
   }
 
   if (httpServer.arg("input_open_limit_set")!= "") {
-    strcpy(open_limit_set, httpServer.arg("input_open_limit_set").c_str());
+    strlcpy(open_limit_set, httpServer.arg("input_open_limit_set").c_str(), sizeof(open_limit_set));
   }
 
   if (httpServer.arg("input_close_limit_set")!= "") {
-    strcpy(close_limit_set, httpServer.arg("input_close_limit_set").c_str());
+    strlcpy(close_limit_set, httpServer.arg("input_close_limit_set").c_str(), sizeof(close_limit_set));
   }
 
   webpage += "<h3>Changes Have Been Submitted BUT not saved</h3>";
@@ -2604,24 +2604,23 @@ void setup() {
   }
 
   // read updated parameters
-  strcpy(host, custom_host.getValue());
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
-  strcpy(mqtt_port, custom_mqtt_port.getValue());
-  strcpy(mqtt_topic, custom_mqtt_topic.getValue());    // device full friendly name
-  strcpy(mqtt_isAuthentication, custom_mqtt_isAuthentication.getValue());
-  strcpy(mqtt_username, custom_mqtt_username.getValue());
-  strcpy(mqtt_password, custom_mqtt_password.getValue());
-  strcpy(update_username, custom_update_username.getValue());
-  strcpy(update_password, custom_update_password.getValue());
-  strcpy(update_password, custom_update_password.getValue());
-  strcpy(update_path, custom_device_path.getValue());
-  strcpy(blinds_speed, custom_blinds_speed.getValue());
-  strcpy(blinds_swing_direction, custom_blinds_swing_direction.getValue());
-  strcpy(blinds_servo_install, custom_blinds_servo_install.getValue());
-  strcpy(blinds_trim_adjust, custom_blinds_trim_adjust.getValue());
-  strcpy(blinds_slip_correction, custom_blinds_slip_correction.getValue());
-  strcpy(OTAAuto_path, custom_OTAAuto_path.getValue());
-  strcpy(tele_update_set, custom_tele_update_set.getValue());
+  strlcpy(host, custom_host.getValue(), sizeof(host));
+  strlcpy(mqtt_server, custom_mqtt_server.getValue(), sizeof(mqtt_server));
+  strlcpy(mqtt_port, custom_mqtt_port.getValue(), sizeof(mqtt_port));
+  strlcpy(mqtt_topic, custom_mqtt_topic.getValue(), sizeof(mqtt_topic));    // device full friendly name
+  strlcpy(mqtt_isAuthentication, custom_mqtt_isAuthentication.getValue(), sizeof(mqtt_isAuthentication));
+  strlcpy(mqtt_username, custom_mqtt_username.getValue(), sizeof(mqtt_username));
+  strlcpy(mqtt_password, custom_mqtt_password.getValue(), sizeof(mqtt_password));
+  strlcpy(update_username, custom_update_username.getValue(), sizeof(update_username));
+  strlcpy(update_password, custom_update_password.getValue(), sizeof(update_password));
+  strlcpy(update_path, custom_device_path.getValue(), sizeof(update_path));
+  strlcpy(blinds_speed, custom_blinds_speed.getValue(), sizeof(blinds_speed));
+  strlcpy(blinds_swing_direction, custom_blinds_swing_direction.getValue(), sizeof(blinds_swing_direction));
+  strlcpy(blinds_servo_install, custom_blinds_servo_install.getValue(), sizeof(blinds_servo_install));
+  strlcpy(blinds_trim_adjust, custom_blinds_trim_adjust.getValue(), sizeof(blinds_trim_adjust));
+  strlcpy(blinds_slip_correction, custom_blinds_slip_correction.getValue(), sizeof(blinds_slip_correction));
+  strlcpy(OTAAuto_path, custom_OTAAuto_path.getValue(), sizeof(OTAAuto_path));
+  strlcpy(tele_update_set, custom_tele_update_set.getValue(), sizeof(tele_update_set));
 
   // V9.1: refresh cached typed config *unconditionally* here — WiFiManager
   // runs this block regardless of whether it decides to persist the config
