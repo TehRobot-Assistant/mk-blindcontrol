@@ -958,7 +958,12 @@ void File_Delete() {
   if (!requireAuth()) return;
   if (httpServer.args() > 0 ) { // Arguments were received
     if (httpServer.hasArg("delete")) {
-      SPIFFS_file_delete(httpServer.arg(0));
+      String fn = httpServer.arg(0);
+      if (fn.indexOf("..") >= 0 || fn.indexOf('/') >= 0) {
+        httpServer.send(400, "text/plain", "Invalid filename");
+        return;
+      }
+      SPIFFS_file_delete(fn);
     }
   } else {
     SelectInput("Select a File to Delete","delete","delete");
@@ -1746,7 +1751,12 @@ void File_Download() { // This gets called twice, the first pass selects the inp
   if (!requireAuth()) return;
   if (httpServer.args() > 0 ) { // Arguments were received
     if (httpServer.hasArg("download")) {
-      DownloadFile(httpServer.arg(0));
+      String fn = httpServer.arg(0);
+      if (fn.indexOf("..") >= 0 || fn.indexOf('/') >= 0) {
+        httpServer.send(400, "text/plain", "Invalid filename");
+        return;
+      }
+      DownloadFile(fn);
     }
   } else {
     SelectInput("Enter filename to download","download","download");
