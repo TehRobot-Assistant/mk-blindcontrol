@@ -569,6 +569,22 @@ bool requireAuth() {
   return true;
 }
 
+// htmlEncode — minimal XSS mitigation for config values echoed into HTML.
+String htmlEncode(const char* s) {
+  String out;
+  out.reserve(strlen(s) + 8);
+  for (; *s; s++) {
+    switch (*s) {
+      case '<':  out += F("&lt;");   break;
+      case '>':  out += F("&gt;");   break;
+      case '&':  out += F("&amp;");  break;
+      case '"':  out += F("&quot;"); break;
+      default:   out += *s;
+    }
+  }
+  return out;
+}
+
 // handleServo - handle servo control
 void handleServo() {
   if (!requireAuth()) return;
@@ -1592,15 +1608,15 @@ void Config_Setup() {
   webpage += F("<h3 class='rcorners_m'>Configuration Setup</h3><br>");
   webpage += F("<table align='center'>");
   webpage += F("<tr><th>Name</th><th style='width:50%'>Set Value</th><th>New Value</th></tr>");
-  webpage += "<tr><td>DHCP/Network Device Name</td><td>"+String(host)+"</td></td>"; // tr
+  webpage += "<tr><td>DHCP/Network Device Name</td><td>"+htmlEncode(host)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_host' placeholder = 'BlindControl1'></td></tr>");
-  webpage += "<tr><td>Device Friendly Name</td><td>"+String(mqtt_topic)+"</td></td>"; // tr
+  webpage += "<tr><td>Device Friendly Name</td><td>"+htmlEncode(mqtt_topic)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_topic'  placeholder = 'Kitchen Blind'></td></tr>");
-  webpage += "<tr><td>MQTT Server</td><td>"+String(mqtt_server)+"</td></td>"; // tr
+  webpage += "<tr><td>MQTT Server</td><td>"+htmlEncode(mqtt_server)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_server'  placeholder = '192.168.0.100'></td></tr>");
-  webpage += "<tr><td>MQTT Port</td><td>"+String(mqtt_port)+"</td></td>"; // tr
+  webpage += "<tr><td>MQTT Port</td><td>"+htmlEncode(mqtt_port)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_port'  placeholder = '1883'></td></tr>");
-  webpage += "<tr><td>MQTT User ID</td><td>"+String(mqtt_username)+"</td></td>"; // tr
+  webpage += "<tr><td>MQTT User ID</td><td>"+htmlEncode(mqtt_username)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_username'  placeholder = 'openhabian'></td></tr>");
   webpage += "<tr><td>MQTT Password</td><td>"+(strlen(mqtt_password)>0 ? String("&bull;&bull;&bull;&bull;") : String("(not set)"))+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_mqtt_password'  placeholder = 'password'></td></tr>");
@@ -1608,7 +1624,7 @@ void Config_Setup() {
   webpage += F("<td><select name='input_mqtt_isAuthentication'><option value=''>         </option><option value='FALSE'>FALSE</option><option value='TRUE'>TRUE</option></select></td></tr>");
   webpage += "<tr><td>Admin Password</td><td>"+(strlen(update_password)>0 ? String("&bull;&bull;&bull;&bull;") : String("(not set)"))+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_update_password' placeholder = 'password'></td></tr>");
-  webpage += "<tr><td>Releases URL</td><td>"+String(OTAAuto_path)+"</td></td>"; // tr
+  webpage += "<tr><td>Releases URL</td><td>"+htmlEncode(OTAAuto_path)+"</td></td>"; // tr
   webpage += F("<td><input class='text' style='width:90%' name='input_OTAAuto_path' placeholder = 'https://github.com/YOUR/FORK/releases'></td></tr>");
   webpage += "<tr><td>Blind Speed</td><td>"+String(blinds_speed)+"</td></td>"; // tr
   webpage += F("<td><select name='input_blinds_speed'><option value=''>         </option><option value='SLOW'>SLOW</option><option value='FAST'>FAST</option></select></td></tr>");
@@ -1675,9 +1691,9 @@ void HomePage() {
   webpage += F("<table align='center'>");
   webpage += F("<tr><th>Name</th><th style='width:50%'>Set Value</th></tr>");
   webpage += "<tr><td>Firmware</td><td>"+String(firmware_installed)+"</td></tr>";
-  webpage += "<tr><td>DHCP/Network Device Name</td><td>"+String(host)+"</td></tr>";
-  webpage += "<tr><td>Device Friendly Name</td><td>"+String(mqtt_topic)+"</td></tr>";   // friendly name
-  webpage += "<tr><td>Devive Unique Name</td><td>"+String(_identifier)+"</td></tr>";
+  webpage += "<tr><td>DHCP/Network Device Name</td><td>"+htmlEncode(host)+"</td></tr>";
+  webpage += "<tr><td>Device Friendly Name</td><td>"+htmlEncode(mqtt_topic)+"</td></tr>";   // friendly name
+  webpage += "<tr><td>Devive Unique Name</td><td>"+htmlEncode(_identifier.c_str())+"</td></tr>";
   webpage += "<tr><td>SSID</td><td>"+String(WiFi.SSID())+"</td></tr>";
   webpage += "<tr><td>IP Address</td><td>"+WiFi.localIP().toString()+"</td></tr>";
   webpage += "<tr><td>RSSI </td><td>"+String(dBmtoPercentage(WiFi.RSSI()))+"</td></tr>";
@@ -1686,13 +1702,13 @@ void HomePage() {
   webpage += "<tr><td>Blind STATE</td><td>"+Blind_STATE+"</td></tr>";
   webpage += "<tr><td>Friendly Blind STATE</td><td>"+HA_Blind_State+"</td></tr>";
   webpage += "<tr><td>Blind Tilt Position</td><td>"+TiltPos+"</td></tr>";
-  webpage += "<tr><td>MQTT Server</td><td>"+String(mqtt_server)+"</td></tr>";
-  webpage += "<tr><td>MQTT Command Topic</td><td>cmnd/"+_identifier+"/POWER</td></tr>";
-  webpage += "<tr><td>MQTT Status Topic</td><td>stat/"+_identifier+"/STATE</td></tr>";
+  webpage += "<tr><td>MQTT Server</td><td>"+htmlEncode(mqtt_server)+"</td></tr>";
+  webpage += "<tr><td>MQTT Command Topic</td><td>cmnd/"+htmlEncode(_identifier.c_str())+"/POWER</td></tr>";
+  webpage += "<tr><td>MQTT Status Topic</td><td>stat/"+htmlEncode(_identifier.c_str())+"/STATE</td></tr>";
 
   // if (String(auto_discovery).equalsIgnoreCase("ENABLED-TILT")) {
-  webpage += "<tr><td>MQTT Tilt Command Topic</td><td>cmnd/"+_identifier+"/tilt</td></tr>";
-  webpage += "<tr><td>MQTT Tilt Status Topic</td><td>stat/"+_identifier+"/tilt-state</td></tr>";
+  webpage += "<tr><td>MQTT Tilt Command Topic</td><td>cmnd/"+htmlEncode(_identifier.c_str())+"/tilt</td></tr>";
+  webpage += "<tr><td>MQTT Tilt Status Topic</td><td>stat/"+htmlEncode(_identifier.c_str())+"/tilt-state</td></tr>";
   // }
 
   webpage += "<tr><td>Blind Speed</td><td>"+String(blinds_speed)+"</td></tr>";
