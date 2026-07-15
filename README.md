@@ -1,8 +1,8 @@
-# mk-blindcontrol — V9 community reliability patch
+# mk-blindcontrol — V10 (security + reliability)
 
 ESP8266 MQTT servo-motor control for venetian blinds. Home Assistant and openHAB integration, built-in web UI.
 
-This is a **community fork** of [`mountain-pitt/mk-blindcontrol`](https://github.com/mountain-pitt/mk-blindcontrol), carrying three layered reliability patches on top of upstream V8. All hardware pins + WiFi-config format stay compatible with V8 — flash over V8, no re-config needed.
+This is a **community fork** of [`mountain-pitt/mk-blindcontrol`](https://github.com/mountain-pitt/mk-blindcontrol): the V9 line rebuilt reliability on top of upstream V8, and **V10** adds a security pass and a batch of bug fixes on top of V9. All hardware pins + WiFi-config format stay compatible with V8 — flash over V8 or V9, no re-config needed.
 
 ## Get the latest firmware
 
@@ -18,9 +18,31 @@ Or grab a specific version from the [Releases page](https://github.com/TehRobot-
 
 Flash with **NodeMCU Flasher** / **esptool.py** / PlatformIO (`pio run -t upload`). ESP-12E settings: 4 MB flash, DIO mode, 40 MHz, write to `0x00000`.
 
-## What V9 fixes
+## What V10 adds
 
-V9 is a layered bug-fix pass, documented fully in [`CHANGELOG-v9.md`](./CHANGELOG-v9.md). Summary:
+V10 is a security-and-correctness pass on top of V9's reliability work — full notes in [`CHANGELOG-v10.md`](./CHANGELOG-v10.md). Drop-in over V9 (or V8): same hardware, same dual-servo behaviour, same config files. Verified on real ESP-12E hardware.
+
+**Security**
+- **Auth on every state-changing endpoint** — config write/save, file upload/delete/download, the file manager, all servo/limit moves, reboot, and the `/resetcmd` factory-reset route (previously an *unauthenticated* filesystem wipe). Only `/firmware`/`/reset`/`/update` were guarded before.
+- **Credentials no longer echoed** — the `/setup` page rendered the MQTT and admin passwords in cleartext; now masked.
+- **XSS hardening** — config values echoed into the setup/home pages are HTML-escaped.
+- **Path-traversal guard** — file download/delete reject `..` and `/`.
+
+**Bug fixes**
+- `==` used as `=` in the button handlers meant a physical press never updated the reported state (HA showed the wrong position).
+- `millis()` 49-day rollover in the telemetry + battery timers (now elapsed-time subtraction).
+- Battery percentage read one bucket past the match (and off the table at full charge).
+- Removed a duplicate, unauthenticated `httpUpdater.setup()`.
+- MQTT Port config field was misnamed `input_host`, so changing the port silently corrupted the hostname.
+- `strcpy` → `strlcpy` for HTTP-arg / WiFiManager copies into fixed buffers.
+- **Socket leak** — `SSDP.begin()` ran on every telemetry tick (~60 s), leaking a UDP socket each time (a guaranteed multi-day crash); now called once at boot.
+
+**Home Assistant**
+- Discovery payload now carries a `device` block and `position_topic` / `set_position_topic`, so the HA cover card's position slider works and entities group correctly. Legacy dead `HAMDiscovery()` path removed.
+
+## What V9 fixed
+
+V9 is a layered reliability pass, documented fully in [`CHANGELOG-v9.md`](./CHANGELOG-v9.md). Summary:
 
 ### V9.1 — reliability patch (post red-team)
 - Non-blocking servo state machine — eliminates multi-second `delay()` calls in SLOW mode that stalled MQTT + WiFi housekeeping
@@ -43,7 +65,7 @@ Upstream V8's `connect()` looped forever on an unreachable MQTT broker, keeping 
 
 ## Backwards compatibility
 
-| Area | V9.x vs upstream V8 |
+| Area | V9.x / V10 vs upstream V8 |
 |---|---|
 | GPIO pin map (servo 0 → 13/D7, servo 1 → 14/D5, state-read pin 0) | **Unchanged** |
 | Dual-motor behaviour (both written in lockstep, only servo 0 reads state back) | **Unchanged** |
@@ -64,6 +86,6 @@ PRs welcome on this fork. Reviewable diffs against upstream V8: the whole V9 sto
 
 - **Matt Kaczynski / MKSMARTHOUSE** — original V1/V2 design, hardware + firmware. [mksmarthouse.com](https://www.mksmarthouse.com/)
 - **mountain-pitt** — V7 / V8 upstream. [github.com/mountain-pitt/mk-blindcontrol](https://github.com/mountain-pitt/mk-blindcontrol)
-- V9.x reliability patches — this fork.
+- V9.x reliability patches + V10 security/bug-fix pass — this fork.
 
 MIT licensed (matching upstream).
