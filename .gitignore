@@ -31,3 +31,7 @@ main.cpp
 *.code-workspace
 
 
+
+*_build.log
+*.pio
+.pio/
